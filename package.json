@@ -1,0 +1,23 @@
+{
+  "name": "atyro-convoy-inspired-panel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Atyro Cloud Proxmox VPS management panel",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.8.1",
+    "connect-sqlite3": "^0.9.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-session": "^1.18.1",
+    "helmet": "^8.0.0",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4"
+  }
+}
