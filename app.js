@@ -122,17 +122,17 @@ function decrypt(payload) {
 }
 
 app.disable("x-powered-by");
-app.set("trust proxy", Number(process.env.TRUST_PROXY || 0));
+app.set("trust proxy", process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 1);
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://ajax.cloudflare.com", "https://static.cloudflareinsights.com"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdn.jsdelivr.net"],
       fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
       imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
       mediaSrc: ["'self'", "data:", "blob:", "https:", "http:"],
-      connectSrc: ["'self'", "ws:", "wss:", "https:", "http:"],
+      connectSrc: ["'self'", "ws:", "wss:", "https:", "http:", "https://cloudflareinsights.com"],
       objectSrc: ["'none'"],
       frameAncestors: ["'none'"]
     }

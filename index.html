@@ -892,6 +892,126 @@ tbody tr:hover {
 .terminal-screen-container .xterm-viewport {
   overflow-y: auto !important;
 }
+
+/* --- Embedded xterm.js Core & Anti-Glitch Styles --- */
+.xterm {
+  cursor: text;
+  position: relative;
+  user-select: none;
+  -ms-user-select: none;
+  -webkit-user-select: none;
+}
+.xterm.focus,
+.xterm:focus {
+  outline: none;
+}
+.xterm .xterm-helpers {
+  position: absolute;
+  top: 0;
+  z-index: 5;
+}
+.xterm .xterm-helper-textarea,
+.xterm-helper-textarea {
+  padding: 0 !important;
+  border: 0 !important;
+  margin: 0 !important;
+  position: absolute !important;
+  opacity: 0 !important;
+  left: -9999em !important;
+  top: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  z-index: -5 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  resize: none !important;
+  background: transparent !important;
+  color: transparent !important;
+  pointer-events: none !important;
+}
+.xterm-char-measure-element {
+  display: inline-block !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: -9999em !important;
+  line-height: normal !important;
+}
+.xterm .composition-view {
+  background: #000;
+  color: #FFF;
+  display: none;
+  position: absolute;
+  white-space: nowrap;
+  z-index: 1;
+}
+.xterm .composition-view.active {
+  display: block;
+}
+.xterm .xterm-viewport {
+  background-color: #000;
+  overflow-y: scroll;
+  cursor: default;
+  position: absolute;
+  right: 0;
+  left: 0;
+  top: 0;
+  bottom: 0;
+}
+.xterm .xterm-screen {
+  position: relative;
+}
+.xterm .xterm-screen canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.xterm .xterm-scroll-area {
+  visibility: hidden;
+}
+.xterm.enable-mouse-events {
+  cursor: default;
+}
+.xterm.xterm-cursor-pointer,
+.xterm .xterm-cursor-pointer {
+  cursor: pointer;
+}
+.xterm.column-select.focus {
+  cursor: crosshair;
+}
+.xterm .xterm-accessibility,
+.xterm .xterm-message {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  z-index: 10;
+  color: transparent;
+  pointer-events: none;
+}
+.xterm .live-region {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+.xterm-dim {
+  opacity: 1 !important;
+}
+.xterm-underline-1 { text-decoration: underline; }
+.xterm-underline-2 { text-decoration: double underline; }
+.xterm-underline-3 { text-decoration: wavy underline; }
+.xterm-underline-4 { text-decoration: dotted underline; }
+.xterm-underline-5 { text-decoration: dashed underline; }
+.xterm-overline { text-decoration: overline; }
+.xterm-overline.xterm-underline-1 { text-decoration: overline underline; }
+.xterm-overline.xterm-underline-2 { text-decoration: overline double underline; }
+.xterm-overline.xterm-underline-3 { text-decoration: overline wavy underline; }
+.xterm-overline.xterm-underline-4 { text-decoration: overline dotted underline; }
+.xterm-overline.xterm-underline-5 { text-decoration: overline dashed underline; }
+.xterm-strikethrough { text-decoration: line-through; }
 .terminal-overlay-banner {
   position: absolute;
   inset: 0;
@@ -2063,9 +2183,9 @@ body.has-custom-bg .table-wrap table {
 <div id="modalRoot"></div>
 <div id="confirmRoot"></div>
 <div id="toastRoot"></div>
-<script src="/socket.io/socket.io.js"></script>
-<script src="/xterm/lib/xterm.js"></script>
-<script src="/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+<script src="/socket.io/socket.io.js" data-cfasync="false"></script>
+<script src="/xterm/lib/xterm.js" data-cfasync="false"></script>
+<script src="/xterm-addon-fit/lib/xterm-addon-fit.js" data-cfasync="false"></script>
 <script>
 /**
  * IMPORTANT SECURITY NOTE:
@@ -3765,10 +3885,7 @@ async function openXtermConsole(id) {
     }
 
     try {
-      if (typeof window.Terminal === "undefined" || !window.FitAddon?.FitAddon) {
-        await loadScript("/xterm/lib/xterm.js");
-        await loadScript("/xterm-addon-fit/lib/xterm-addon-fit.js");
-      }
+      const { Term: TerminalCtor, Fit: FitAddonCtor } = await ensureXtermAvailable();
 
       const res = await api(`/servers/${id}/termproxy`, { method: "POST" });
       if (!res.ok || !res.sessionId) {
@@ -3779,7 +3896,7 @@ async function openXtermConsole(id) {
       if (!mountEl) return;
       mountEl.innerHTML = "";
 
-      term = new window.Terminal({
+      term = new TerminalCtor({
         cursorBlink: true,
         cursorStyle: "bar",
         fontSize: 13,
@@ -3811,7 +3928,7 @@ async function openXtermConsole(id) {
         scrollback: 5000
       });
 
-      fitAddon = new window.FitAddon.FitAddon();
+      fitAddon = new FitAddonCtor();
       term.loadAddon(fitAddon);
       term.open(mountEl);
       fitAddon.fit();
@@ -3903,16 +4020,70 @@ async function openXtermConsole(id) {
     }
   }
 
-  function loadScript(src) {
+  function getTerminalCtor() {
+    if (typeof window.Terminal === "function") return window.Terminal;
+    if (window.Terminal && typeof window.Terminal.Terminal === "function") return window.Terminal.Terminal;
+    if (window.Terminal && typeof window.Terminal.default === "function") return window.Terminal.default;
+    return null;
+  }
+
+  function getFitAddonCtor() {
+    if (window.FitAddon && typeof window.FitAddon.FitAddon === "function") return window.FitAddon.FitAddon;
+    if (typeof window.FitAddon === "function") return window.FitAddon;
+    if (window.FitAddon && typeof window.FitAddon.default === "function") return window.FitAddon.default;
+    return null;
+  }
+
+  function injectScript(src) {
     return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`script[src="${src}"]`);
-      if (existing) return resolve();
       const s = document.createElement("script");
       s.src = src;
-      s.onload = resolve;
-      s.onerror = reject;
+      s.async = false;
+      s.setAttribute("data-cfasync", "false");
+      s.onload = () => resolve();
+      s.onerror = (e) => reject(new Error(`Failed to load: ${src}`));
       document.head.appendChild(s);
     });
+  }
+
+  async function ensureXtermAvailable() {
+    let Term = getTerminalCtor();
+    let Fit = getFitAddonCtor();
+    if (Term && Fit) return { Term, Fit };
+
+    // Wait up to 2 seconds if scripts are already downloading
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      Term = getTerminalCtor();
+      Fit = getFitAddonCtor();
+      if (Term && Fit) return { Term, Fit };
+    }
+
+    // Try dynamic load from local routes
+    try {
+      await injectScript(`/xterm/lib/xterm.js?_t=${Date.now()}`);
+      await injectScript(`/xterm-addon-fit/lib/xterm-addon-fit.js?_t=${Date.now()}`);
+    } catch (e) {
+      console.warn("[xterm] Local load failed, attempting CDN fallback:", e);
+    }
+
+    Term = getTerminalCtor();
+    Fit = getFitAddonCtor();
+    if (Term && Fit) return { Term, Fit };
+
+    // CDN fallback (jsdelivr)
+    try {
+      await injectScript("https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js");
+      await injectScript("https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js");
+    } catch (e) {
+      console.error("[xterm] CDN load failed:", e);
+    }
+
+    Term = getTerminalCtor();
+    Fit = getFitAddonCtor();
+    if (Term && Fit) return { Term, Fit };
+
+    throw new Error("Terminal engine (xterm.js) could not be loaded. Please disable Cloudflare Rocket Loader or check network connection.");
   }
 
   initConnection();
