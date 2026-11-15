@@ -15,7 +15,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/xterm/css/xterm.css">
+<link rel="stylesheet" href="/xterm/css/xterm.css?v=2.2">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
 <style>
 :root {
   /* Convoy-inspired Palette */
@@ -905,37 +906,55 @@ tbody tr:hover {
 .xterm:focus {
   outline: none;
 }
-.xterm .xterm-helpers {
-  position: absolute;
-  top: 0;
-  z-index: 5;
-}
-.xterm .xterm-helper-textarea,
-.xterm-helper-textarea {
-  padding: 0 !important;
-  border: 0 !important;
-  margin: 0 !important;
+.xterm .xterm-helpers,
+.terminal-screen-container .xterm-helpers {
   position: absolute !important;
-  opacity: 0 !important;
-  left: -9999em !important;
   top: 0 !important;
+  left: 0 !important;
+  z-index: 10 !important;
+}
+.terminal-screen-container textarea,
+.terminal-screen-container .xterm-helper-textarea,
+.xterm .xterm-helper-textarea,
+.xterm textarea,
+textarea.xterm-helper-textarea,
+.xterm-helper-textarea {
+  position: absolute !important;
+  top: 0 !important;
+  left: -9999em !important;
   width: 0 !important;
   height: 0 !important;
-  z-index: -5 !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  resize: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
   background: transparent !important;
+  background-color: transparent !important;
   color: transparent !important;
-  pointer-events: none !important;
+  opacity: 0 !important;
+  resize: none !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  z-index: -5 !important;
 }
-.xterm-char-measure-element {
+.terminal-screen-container .xterm-char-measure-element,
+.xterm .xterm-char-measure-element,
+.xterm-char-measure-element,
+[class*="char-measure"] {
   display: inline-block !important;
   visibility: hidden !important;
   position: absolute !important;
   top: 0 !important;
   left: -9999em !important;
   line-height: normal !important;
+  opacity: 0 !important;
+  color: transparent !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  z-index: -9999 !important;
 }
 .xterm .composition-view {
   background: #000;
@@ -2528,9 +2547,144 @@ function applySiteSettings(settings) {
 
 function renderLogin() {
   const siteDesc = state.settings?.site_description || "Sign in to manage your infrastructure.";
-  $("#root").innerHTML = `<section class="login-wrap"><div class="login-card">${renderBrandLogo()}<h1>Welcome back</h1><p>${esc(siteDesc)}</p><form id="loginForm"><div class="field"><label>Username or email</label><input name="username" autocomplete="username" placeholder="Enter username or email" required></div><div class="field"><label>Password</label><div style="position:relative"><input name="password" id="loginPassInput" type="password" autocomplete="current-password" placeholder="Enter your password" required style="padding-right:45px"><button type="button" id="loginTogglePassBtn" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;color:#888;padding:4px 8px;font-size:14px">${ico("eye")}</button></div></div><button class="btn primary" type="submit" style="margin-top:10px">Sign in to panel</button></form><div class="notice">${ico("lock")} Secure enterprise access · Proxmox VE hypervisor management</div></div></section>`;
+  const allowReg = state.settings?.allow_registration === "1" || state.settings?.allow_registration === true || state.settings?.allow_registration === "true";
+
+  $("#root").innerHTML = `
+    <section class="login-wrap">
+      <div class="login-card">
+        ${renderBrandLogo()}
+        ${allowReg ? `
+          <div style="display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px;margin-bottom:18px">
+            <button type="button" class="btn primary small" style="flex:1;border-radius:8px;font-weight:600">Sign In</button>
+            <button type="button" class="btn ghost small" id="switchToRegisterTab" style="flex:1;border-radius:8px;font-weight:600;color:var(--muted)">Register</button>
+          </div>
+        ` : ''}
+        <h1>Welcome back</h1>
+        <p>${esc(siteDesc)}</p>
+        <form id="loginForm">
+          <div class="field">
+            <label>Username or email</label>
+            <input name="username" autocomplete="username" placeholder="Enter username or email" required autofocus>
+          </div>
+          <div class="field">
+            <label>Password</label>
+            <div style="position:relative">
+              <input name="password" id="loginPassInput" type="password" autocomplete="current-password" placeholder="Enter your password" required style="padding-right:45px">
+              <button type="button" id="loginTogglePassBtn" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;color:#888;padding:4px 8px;font-size:14px">${ico("eye")}</button>
+            </div>
+          </div>
+          <button class="btn primary" type="submit" style="margin-top:10px;width:100%">${ico("login")} Sign in to panel</button>
+        </form>
+        ${allowReg ? `
+          <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--muted)">
+            Don't have an account? <a href="javascript:void(0)" id="linkToRegister" style="color:var(--accent);font-weight:600;text-decoration:none">Create an account</a>
+          </div>
+        ` : ''}
+        <div class="notice">${ico("lock")} Secure enterprise access · Proxmox VE hypervisor management</div>
+      </div>
+    </section>
+  `;
+
   const passInp = $("#loginPassInput"), togBtn = $("#loginTogglePassBtn");
   if (togBtn && passInp) togBtn.onclick = () => { passInp.type = passInp.type === "password" ? "text" : "password"; };
+
+  const switchReg = $("#switchToRegisterTab");
+  const linkReg = $("#linkToRegister");
+  if (switchReg) switchReg.onclick = () => renderRegister();
+  if (linkReg) linkReg.onclick = () => renderRegister();
+}
+
+function renderRegister() {
+  const allowReg = state.settings?.allow_registration === "1" || state.settings?.allow_registration === true || state.settings?.allow_registration === "true";
+  if (!allowReg) return renderLogin();
+
+  $("#root").innerHTML = `
+    <section class="login-wrap">
+      <div class="login-card" style="max-width:440px">
+        ${renderBrandLogo()}
+        <div style="display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px;margin-bottom:18px">
+          <button type="button" class="btn ghost small" id="switchToLoginTab" style="flex:1;border-radius:8px;font-weight:600;color:var(--muted)">Sign In</button>
+          <button type="button" class="btn primary small" style="flex:1;border-radius:8px;font-weight:600">Register</button>
+        </div>
+        <h1>Create Account</h1>
+        <p>Register a new account to deploy and manage virtual servers.</p>
+        <form id="registerForm">
+          <div class="field">
+            <label>Username</label>
+            <input name="username" id="regUsername" placeholder="e.g. alex_cloud" required minlength="3" maxlength="32" autocomplete="username" autofocus>
+            <span class="small muted">3–32 characters (letters, numbers, underscores, hyphens, periods).</span>
+          </div>
+          <div class="field">
+            <label>Email Address</label>
+            <input name="email" id="regEmail" type="email" placeholder="alex@example.com" required autocomplete="email">
+          </div>
+          <div class="field">
+            <label>Password (min 8 characters)</label>
+            <div style="position:relative">
+              <input name="password" id="regPassInput" type="password" minlength="8" placeholder="Choose a secure password" required style="padding-right:45px" autocomplete="new-password">
+              <button type="button" id="regTogglePassBtn" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;color:#888;padding:4px 8px;font-size:14px">${ico("eye")}</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Confirm Password</label>
+            <input name="confirmPassword" id="regConfirmPassInput" type="password" minlength="8" placeholder="Re-enter password" required autocomplete="new-password">
+          </div>
+          <button class="btn primary" id="regSubmitBtn" type="submit" style="margin-top:10px;width:100%">${ico("plus")} Register Account</button>
+        </form>
+        <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--muted)">
+          Already have an account? <a href="javascript:void(0)" id="linkToLogin" style="color:var(--accent);font-weight:600;text-decoration:none">Sign in</a>
+        </div>
+        <div class="notice">${ico("shield")} Standard User Account · Proxmox VE Infrastructure</div>
+      </div>
+    </section>
+  `;
+
+  const passInp = $("#regPassInput"), togBtn = $("#regTogglePassBtn");
+  if (togBtn && passInp) togBtn.onclick = () => { passInp.type = passInp.type === "password" ? "text" : "password"; };
+
+  const switchLogin = $("#switchToLoginTab");
+  const linkLogin = $("#linkToLogin");
+  if (switchLogin) switchLogin.onclick = () => renderLogin();
+  if (linkLogin) linkLogin.onclick = () => renderLogin();
+
+  const form = $("#registerForm");
+  if (form) {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const username = fd.get("username")?.trim();
+      const email = fd.get("email")?.trim().toLowerCase();
+      const password = fd.get("password");
+      const confirmPassword = fd.get("confirmPassword");
+
+      if (password !== confirmPassword) {
+        return toast("Passwords do not match. Please re-enter.", "error");
+      }
+
+      const submitBtn = $("#regSubmitBtn");
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `${ico("spinner", "spin sm")} Creating Account…`;
+      }
+
+      try {
+        const d = await api("/auth/register", {
+          method: "POST",
+          body: JSON.stringify({ username, email, password })
+        });
+        state.user = d.user;
+        state.csrf = d.csrfToken;
+        toast(`Welcome, ${username}! Your account has been registered.`, "success");
+        await loadDashboard();
+      } catch (err) {
+        toast(err.message, "error");
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = `${ico("plus")} Register Account`;
+        }
+      }
+    };
+  }
 }
 
 function renderSetup() {
@@ -2683,6 +2837,7 @@ async function handleRootClick(e) {
     if (action === "power") { await serverAction(id, act.dataset.power); if (state.page === "vps") await renderPage(); return; }
     if (action === "snapshot") { await createSnapshot(id); if (state.page === "vps") await renderPage(); return; }
     if (action === "add-user") return userModal();
+    if (action === "edit-user") return editUserModal(id);
     if (action === "add-node") return nodeModal();
     if (action === "edit-node") return editNodeModal(id);
     if (action === "delete-node") return deleteNode(id);
@@ -3133,11 +3288,33 @@ async function loadEditVpsTab(id) {
     const d = await api(`/servers/${id}/edit/options`);
     const s = d.server, cfg = d.config || {}, st = d.status || {}, bridges = d.bridges || ["vmbr0", "vmbr1"], users = d.users || [];
     const diskKey = d.diskKey || "scsi0", currentDiskGb = d.currentDiskGb || 20;
+    const diskOptions = d.diskOptions || { cache: "writeback", discard: true, ssd: true, mbps_rd: "", mbps_wr: "", iops_rd: "", iops_wr: "" };
+    const netRate = d.netRate || "";
+    const startupOrder = d.startupOrder || "";
+    const startupUp = d.startupUp || "";
+    const startupDown = d.startupDown || "";
+    const cpuModels = d.cpuModels || ["host", "kvm64", "qemu64", "x86-64-v2-AES", "x86-64-v3"];
     const isQemu = s.type === "qemu", isLxc = s.type === "lxc";
     const cores = cfg.cores || st.cpus || 2;
     const sockets = cfg.sockets || 1;
+    const cpuModel = cfg.cpu || "host";
+    const cpuLimit = cfg.cpulimit !== undefined ? cfg.cpulimit : "";
+    const cpuUnits = cfg.cpuunits !== undefined ? cfg.cpuunits : "";
+    const numa = cfg.numa === 1 || cfg.numa === "1";
     const memory = cfg.memory || Math.round((st.maxmem || 2147483648) / (1024 * 1024));
+    const balloon = cfg.balloon !== undefined ? cfg.balloon : "";
     const swap = cfg.swap != null ? cfg.swap : 512;
+    const vga = cfg.vga || "serial0";
+    const bios = cfg.bios || "seabios";
+    const machine = cfg.machine || "pc";
+    const features = cfg.features || "";
+    const nesting = features ? features.includes("nesting=1") : true;
+    const keyctl = features ? features.includes("keyctl=1") : false;
+    const fuse = features ? features.includes("fuse=1") : false;
+    const mknod = features ? features.includes("mknod=1") : false;
+    const agent = cfg.agent ? (String(cfg.agent) === "1" || cfg.agent === 1) : true;
+    const onboot = cfg.onboot === 1 || cfg.onboot === "1";
+
     const netStr = cfg.net0 || "";
     const currentBridge = netStr.match(/bridge=([^,]+)/)?.[1] || "vmbr0";
     const currentVlan = netStr.match(/tag=([0-9]+)/)?.[1] || "";
@@ -3160,16 +3337,16 @@ async function loadEditVpsTab(id) {
     const nameServers = cfg.nameserver || "";
     const ciUser = cfg.ciuser || "root";
     const sshKey = decodeURIComponent(cfg.sshkeys || cfg["ssh-public-keys"] || "");
-    const nesting = cfg.features ? cfg.features.includes("nesting=1") : true;
-    const agent = cfg.agent ? (String(cfg.agent) === "1" || cfg.agent === 1) : true;
+
     const bridgesHtml = bridges.map(b => {
       const bName = typeof b === "object" ? (b.iface || b.name || "vmbr0") : b;
       return `<option value="${esc(bName)}" ${bName === currentBridge ? "selected" : ""}>${esc(bName)}</option>`;
     }).join("");
     const usersHtml = users.map(u => `<option value="${u.id}" ${u.id === s.user_id ? "selected" : ""}>${esc(u.username)} (${esc(u.email)}) [${esc(u.role)}]</option>`).join("");
+    const cpuModelsHtml = cpuModels.map(m => `<option value="${esc(m)}" ${m === cpuModel ? "selected" : ""}>${esc(m)}${m === 'host' ? ' (Host Passthrough - Max Performance)' : ''}</option>`).join("");
 
     const isAdmin = state.user.role === "admin";
-    wrap.innerHTML = `<div class="panel-title"><div><h3>${ico("edit")} Edit ${isQemu ? 'Virtual Machine' : 'LXC Container'} Specs & Configuration</h3><p class="muted small" style="margin:4px 0 0">${esc(s.name)} (VMID ${s.vmid} · ${esc(s.type.toUpperCase())} · Node ${esc(s.pve_node || s.node_name)})</p></div><div style="display:flex;gap:8px"><button class="btn ghost small" data-action="vps-tab" data-tab="specs">${ico("arrowLeft")} Back to Specs</button></div></div>${isAdmin ? `<div class="notice" style="border-color:rgba(34,197,94,0.2);background:rgba(34,197,94,0.05);color:#86efac;margin-top:0;margin-bottom:20px;border-radius:12px;padding:14px;font-size:12px"><b>${ico("lightbulb", "sm", "color:var(--yellow)")} Live Proxmox Configuration:</b> Hardware adjustments, disk enlargement, network bridge, and DNS updates are dispatched directly to Proxmox VE. Disk enlargement takes effect online without downtime.</div>` : `<div class="notice" style="border-color:rgba(56,189,248,0.2);background:rgba(56,189,248,0.05);color:#7dd3fc;margin-top:0;margin-bottom:20px;border-radius:12px;padding:14px;font-size:12px"><b>${ico("user", "sm")} Standard User Access:</b> You have full control over your VPS operating system, root password, SSH public keys, hostname, autostart at host boot, and DNS configuration. Hardware allocations (vCPU, RAM, Disk quota) and Network Routing (Bridge, IP & Firewall) are managed by the administrator.</div>`}<form id="editVpsForm" style="display:flex;flex-direction:column;gap:18px"><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>1. Identity & Panel Ownership</h4></div><div class="form-grid"><div class="field"><label>Server Display Name / Hostname</label><input name="name" id="editNameInput" value="${esc(s.name)}" required></div>${isAdmin ? `<div class="field"><label style="display:flex;justify-content:space-between"><span>Assigned Panel User (Owner)</span><a href="javascript:void(0)" data-action="unassign" data-id="${s.id}" data-name="${esc(s.name)}" data-vmid="${s.vmid}" style="color:#fca5a5;font-size:11px;font-weight:600;text-decoration:none">${ico("ban", "sm")} Remove Assignment</a></label><select name="userId">${usersHtml}</select></div>` : `<div class="field"><label>Assigned Owner</label><input value="${esc(s.username)}" disabled style="opacity:.7"></div>`}</div></div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>2. Compute & Memory (RAM) Allocation</h4></div>${isAdmin ? `<div class="form-grid"><div class="field"><label style="display:flex;justify-content:space-between"><span>vCPU Cores</span><span style="display:flex;gap:4px"><span class="preset-chip quick-edit-core" data-val="1">1C</span><span class="preset-chip quick-edit-core" data-val="2">2C</span><span class="preset-chip quick-edit-core" data-val="4">4C</span><span class="preset-chip quick-edit-core" data-val="8">8C</span><span class="preset-chip quick-edit-core" data-val="16">16C</span></span></label><input name="cores" id="editCoresInput" type="number" min="1" max="128" value="${cores}" required></div><div class="field"><label style="display:flex;justify-content:space-between"><span>Memory (RAM in MB)</span><span style="display:flex;gap:4px"><span class="preset-chip quick-edit-ram" data-val="1024">1G</span><span class="preset-chip quick-edit-ram" data-val="2048">2G</span><span class="preset-chip quick-edit-ram" data-val="4096">4G</span><span class="preset-chip quick-edit-ram" data-val="8192">8G</span><span class="preset-chip quick-edit-ram" data-val="16384">16G</span></span></label><input name="memory" id="editMemoryInput" type="number" min="256" step="128" value="${memory}" required></div></div>${isQemu ? `<div class="form-grid"><div class="field"><label>CPU Sockets</label><input name="sockets" type="number" min="1" max="8" value="${sockets}"></div><div class="field"><label>CPU Type / Emulation</label><input value="${esc(cfg.cpu || 'host / default')}" disabled style="opacity:.7"></div></div>` : ''}${isLxc ? `<div class="field"><label style="display:flex;justify-content:space-between"><span>Swap Memory (MB)</span><span style="display:flex;gap:4px"><span class="preset-chip quick-edit-swap" data-val="0">0M</span><span class="preset-chip quick-edit-swap" data-val="512">512M</span><span class="preset-chip quick-edit-swap" data-val="1024">1G</span><span class="preset-chip quick-edit-swap" data-val="2048">2G</span></span></label><input name="swap" id="editSwapInput" type="number" min="0" step="128" value="${swap}"></div>` : ''}` : `<div class="form-grid"><div class="field"><label>Allocated vCPU Cores</label><input value="${cores} vCPU Core(s)" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>Allocated Memory (RAM)</label><input value="${memory} MB (${formatBytes(memory * 1024 * 1024)})" disabled style="opacity:.7;cursor:not-allowed"></div></div><input type="hidden" name="cores" value="${cores}"><input type="hidden" name="memory" value="${memory}">`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><div><h4>3. ${ico("backup")} Disk Volume ${isAdmin ? 'Expansion (Live Proxmox Resize)' : '(Provisioned Quota)'}</h4><p class="muted small" style="margin:2px 0 0">Current provisioned size: <b>${currentDiskGb} GB</b> (${esc(diskKey)})${!isAdmin ? ` · ${ico("lock", "sm")} Quota managed by administrator` : ''}</p></div></div>${isAdmin ? `<div class="form-grid"><div class="field"><label style="display:flex;justify-content:space-between"><span>Add Extra Disk Space (+GB)</span><span style="display:flex;gap:4px"><span class="preset-chip quick-add-disk" data-val="5">+5G</span><span class="preset-chip quick-add-disk" data-val="10">+10G</span><span class="preset-chip quick-add-disk" data-val="20">+20G</span><span class="preset-chip quick-add-disk" data-val="50">+50G</span></span></label><input name="addDiskGb" id="editAddDiskInput" type="number" min="0" max="2000" placeholder="e.g. 10 (adds 10GB)"></div><div class="field"><label>Or Set New Total Size (GB)</label><input name="newTotalDiskGb" id="editNewTotalDiskInput" type="number" min="${currentDiskGb}" placeholder="e.g. ${currentDiskGb + 20}"><span class="small muted">Must be greater than current ${currentDiskGb} GB.</span></div></div>` : ''}<input type="hidden" name="currentDiskGb" value="${currentDiskGb}"><input type="hidden" name="diskKey" value="${esc(diskKey)}"></div><div class="panel" style="background:var(--panel2)"><div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><h4>4. ${ico("network")} Network Adapter & IP Routing (${isLxc ? 'eth0' : 'net0'})</h4>${!isAdmin ? `<p class="muted small" style="margin:2px 0 0">Network interfaces, virtual bridge, and IP routing are locked and managed by the administrator.</p>` : ''}</div>${!isAdmin ? `<span class="tag" style="background:rgba(234,179,8,0.1);color:#fbbf24;border-color:rgba(234,179,8,0.25)">${ico("lock", "sm")} Locked (Admin Managed)</span>` : ''}</div>${isAdmin ? `<div class="form-grid"><div class="field"><label>Network Bridge</label><select name="bridge" required>${bridgesHtml}</select></div><div class="field"><label>VLAN Tag <span class="muted small">(optional)</span></label><input name="vlan" type="number" min="1" max="4094" value="${esc(currentVlan)}" placeholder="None / untagged"></div></div><div class="form-grid"><div class="field"><label>MAC Address <span class="muted small">(optional)</span></label><input name="mac" value="${esc(currentMac)}" placeholder="Auto"></div><div class="field" style="display:flex;align-items:center;padding-top:24px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="firewall" ${currentFirewall ? 'checked' : ''} style="width:auto;cursor:pointer"><span>Enable Proxmox VE Firewall</span></label></div></div><div style="margin:14px 0 8px"><label style="display:block;font-size:12px;color:#aaa;margin-bottom:8px">IPv4 Configuration:</label><div style="display:flex;gap:10px"><button type="button" id="editBtnIp4Dhcp" class="btn ${state.editVpsState.ip4Type === 'dhcp' ? 'primary' : 'ghost'}" style="flex:1;padding:9px;font-size:12px">${ico("statusDot", "sm")} DHCP (Automatic)</button><button type="button" id="editBtnIp4Static" class="btn ${state.editVpsState.ip4Type === 'static' ? 'primary' : 'ghost'}" style="flex:1;padding:9px;font-size:12px">${ico("statusDot", "sm")} Static IPv4 (CIDR / Gateway)</button></div></div><div id="editIp4StaticFields" class="${state.editVpsState.ip4Type === 'static' ? '' : 'hidden'} form-grid" style="margin-top:10px;background:var(--bg);padding:14px;border-radius:10px;border:1px solid var(--line)"><div class="field"><label>IPv4 Address / CIDR</label><input name="ip4Address" id="editIp4AddressInput" value="${esc(ip4Address)}" placeholder="e.g. 192.168.1.150/24"></div><div class="field"><label>IPv4 Gateway</label><input name="ip4Gateway" id="editIp4GatewayInput" value="${esc(ip4Gateway)}" placeholder="e.g. 192.168.1.1"></div></div><div style="margin:16px 0 8px"><div class="field"><label>IPv6 Configuration</label><select name="ip6Type" id="editIp6Select"><option value="auto" ${state.editVpsState.ip6Type === 'auto' ? 'selected' : ''}>SLAAC / Auto-Configuration (ip6=auto)</option><option value="dhcp" ${state.editVpsState.ip6Type === 'dhcp' ? 'selected' : ''}>DHCPv6 (ip6=dhcp)</option><option value="static" ${state.editVpsState.ip6Type === 'static' ? 'selected' : ''}>Static IPv6 (ip6=static)</option><option value="disabled" ${state.editVpsState.ip6Type === 'disabled' ? 'selected' : ''}>Disabled / None</option></select></div></div><div id="editIp6StaticFields" class="${state.editVpsState.ip6Type === 'static' ? '' : 'hidden'} form-grid" style="margin-top:10px;background:var(--bg);padding:14px;border-radius:10px;border:1px solid var(--line)"><div class="field"><label>IPv6 Address / CIDR</label><input name="ip6Address" id="editIp6AddressInput" value="${esc(ip6Address)}" placeholder="e.g. 2001:db8::10/64"></div><div class="field"><label>IPv6 Gateway</label><input name="ip6Gateway" id="editIp6GatewayInput" value="${esc(ip6Gateway)}" placeholder="e.g. 2001:db8::1"></div></div>` : `<div class="form-grid"><div class="field"><label>Assigned Network Bridge</label><input value="${esc(currentBridge || 'vmbr0')}" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>IPv4 Network Assignment</label><input value="${isIp4Static && ip4Address ? `${esc(ip4Address)}${ip4Gateway ? ' (GW: ' + esc(ip4Gateway) + ')' : ''}` : 'DHCP (Automatic IP)'}" disabled style="opacity:.7;cursor:not-allowed"></div></div><div class="form-grid"><div class="field"><label>IPv6 Network Assignment</label><input value="${ip6Type === 'static' && ip6Address ? `${esc(ip6Address)}${ip6Gateway ? ' (GW: ' + esc(ip6Gateway) + ')' : ''}` : (ip6Type === 'auto' ? 'SLAAC / Auto-Configuration' : (ip6Type === 'dhcp' ? 'DHCPv6' : 'Disabled / None'))}" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>Hardware MAC Address</label><input value="${esc(currentMac || 'Auto-allocated by Proxmox')}" disabled style="opacity:.7;cursor:not-allowed"></div></div><div class="form-grid"><div class="field"><label>VLAN Tagging</label><input value="${currentVlan ? 'VLAN ' + esc(currentVlan) : 'Untagged / Default'}" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>Proxmox VE Firewall</label><input value="${currentFirewall ? 'Enabled (Active)' : 'Disabled'}" disabled style="opacity:.7;cursor:not-allowed"></div></div>`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>5. ${ico("network")} DNS Search Domain & Nameservers</h4></div><div class="form-grid"><div class="field"><label>DNS Search Domain</label><input name="searchDomain" value="${esc(searchDomain)}" placeholder="e.g. myvps.lan or company.local"></div><div class="field"><label>DNS Nameservers (space-separated)</label><input name="nameServers" value="${esc(nameServers)}" placeholder="e.g. 1.1.1.1 8.8.8.8"></div></div></div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>6. ${ico("lock")} Credentials & Authentication</h4></div>${isQemu ? `<div class="form-grid"><div class="field"><label>Cloud-Init User (Username)</label><input name="ciUser" value="${esc(ciUser)}" placeholder="root or ubuntu"></div><div class="field"><label style="display:flex;justify-content:space-between"><span>Set New Root Password <span class="muted small">(leave blank to keep unchanged)</span></span><a href="javascript:void(0)" id="editGenPassBtn" style="color:var(--accent);font-size:11px;font-weight:600">${ico("dice", "sm")} Generate Strong Password</a></label><div style="position:relative"><input name="password" id="editPassInput" type="password" minlength="8" placeholder="****************" style="padding-right:45px"><button type="button" id="editTogglePassBtn" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;color:#888;padding:4px 8px;font-size:13px">${ico("eye")}</button></div></div></div><div class="field"><label>SSH Public Key(s)</label><textarea name="sshKey" rows="2" placeholder="ssh-ed25519 AAAAC3... or ssh-rsa AAAAB3..." style="background:#0d0d0d;border:1px solid #303030;border-radius:8px;padding:9px;color:white;width:100%;font-size:11px;font-family:'Space Grotesk',monospace;resize:vertical">${esc(sshKey)}</textarea></div>` : `<div class="muted small" style="line-height:1.5;padding:4px 0">LXC Container root credentials and SSH keys were injected into the container's root filesystem during initial deployment. To deploy with new credentials or a clean image, use the <b>${ico("disc", "sm")} Reinstall OS</b> tab or update password inside the container via console (<code>passwd</code>).</div>`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>7. Proxmox Features & Integration</h4></div><div style="display:flex;flex-direction:column;gap:10px">${isLxc ? `<div style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="nesting" id="editNestingCheck" ${nesting ? 'checked' : ''} style="width:auto;cursor:pointer"><label for="editNestingCheck" style="font-size:13px;color:#eee;cursor:pointer"><b>Enable Nesting</b> (Allows Docker / Systemd containers inside LXC)</label></div>` : ''}${isQemu ? `<div style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="qemuAgent" id="editAgentCheck" ${agent ? 'checked' : ''} style="width:auto;cursor:pointer"><label for="editAgentCheck" style="font-size:13px;color:#eee;cursor:pointer"><b>Enable QEMU Guest Agent</b> (Required for real-time memory and IP reporting)</label></div>` : ''}</div></div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>8. ${ico("rocket")} Startup, Boot Sequence & Autostart</h4></div><div class="form-grid"><div class="field" style="display:flex;align-items:center;padding-top:16px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="onboot" id="editOnbootCheck" ${(cfg.onboot === 1 || cfg.onboot === "1") ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Start at Host Boot (onboot)</b><br><span class="muted small">Automatically power on this VPS when physical host boots</span></span></label></div><div class="field"><label>Startup / Shutdown Delay & Order</label><input name="startup" value="${esc(cfg.startup || '')}" placeholder="e.g. order=1,up=60,down=30"><span class="small muted">Optional startup delay/order parameters</span></div></div>${isQemu ? `<div class="field" style="margin-top:10px"><label>Boot Device Order</label><input name="boot" value="${esc(cfg.boot || 'order=scsi0;net0')}" placeholder="order=scsi0;net0"><span class="small muted">QEMU boot sequence (e.g. <code>order=scsi0;ide2;net0</code>)</span></div>` : ''}</div><div style="display:flex;gap:12px;align-items:center;margin-top:6px"><button type="submit" class="btn primary" id="editVpsSubmitBtn" style="padding:13px 34px;font-size:14px;font-weight:700">${ico("backup")} Save & Apply Changes</button><button type="button" class="btn ghost" data-action="vps-tab" data-tab="specs" style="padding:13px 20px">Cancel</button></div><div id="editProgressNotice" class="hidden notice" style="border-color:rgba(34,197,94,0.2);background:rgba(34,197,94,0.05);color:#86efac;padding:16px;border-radius:12px"><div style="font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px"><span>${ico("spinner", "spin")}</span> Applying configuration updates to Proxmox VE…</div><div style="font-size:12px;margin-top:6px;line-height:1.5">Sending hardware resize and network commands to node. Please do not close this window (takes approximately 5-15 seconds).</div></div></form>`;
+    wrap.innerHTML = `<div class="panel-title"><div><h3>${ico("edit")} Edit ${isQemu ? 'Virtual Machine' : 'LXC Container'} Specs & Configuration</h3><p class="muted small" style="margin:4px 0 0">${esc(s.name)} (VMID ${s.vmid} · ${esc(s.type.toUpperCase())} · Node ${esc(s.pve_node || s.node_name)})</p></div><div style="display:flex;gap:8px"><button class="btn ghost small" data-action="vps-tab" data-tab="specs">${ico("arrowLeft")} Back to Specs</button></div></div>${isAdmin ? `<div class="notice" style="border-color:rgba(34,197,94,0.2);background:rgba(34,197,94,0.05);color:#86efac;margin-top:0;margin-bottom:20px;border-radius:12px;padding:14px;font-size:12px"><b>${ico("lightbulb", "sm", "color:var(--yellow)")} Full Administrator Control:</b> You have unrestricted access to edit and customize all specifications A-to-Z: CPU cores, sockets, model, quotas, RAM, ballooning, disk IO limits, network bridges, bandwidth speed limiter, IP addressing, hypervisor BIOS/display flags, and autostart policies. All changes are synced live to Proxmox VE.</div>` : `<div class="notice" style="border-color:rgba(56,189,248,0.2);background:rgba(56,189,248,0.05);color:#7dd3fc;margin-top:0;margin-bottom:20px;border-radius:12px;padding:14px;font-size:12px"><b>${ico("user", "sm")} Standard User Access:</b> You have full control over your VPS operating system, root password, SSH public keys, hostname, autostart at host boot, and DNS configuration. Hardware allocations (vCPU, RAM, Disk quota) and Network Routing (Bridge, IP, Bandwidth & Firewall) are managed by the administrator.</div>`}<form id="editVpsForm" style="display:flex;flex-direction:column;gap:18px"><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>1. Identity & Panel Ownership</h4></div><div class="form-grid"><div class="field"><label>Server Display Name / Hostname</label><input name="name" id="editNameInput" value="${esc(s.name)}" required></div>${isAdmin ? `<div class="field"><label style="display:flex;justify-content:space-between"><span>Assigned Panel User (Owner)</span><a href="javascript:void(0)" data-action="unassign" data-id="${s.id}" data-name="${esc(s.name)}" data-vmid="${s.vmid}" style="color:#fca5a5;font-size:11px;font-weight:600;text-decoration:none">${ico("ban", "sm")} Remove Assignment</a></label><select name="userId">${usersHtml}</select></div>` : `<div class="field"><label>Assigned Owner</label><input value="${esc(s.username)}" disabled style="opacity:.7"></div>`}</div></div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>2. Compute & CPU Architecture</h4></div>${isAdmin ? `<div class="form-grid"><div class="field"><label style="display:flex;justify-content:space-between"><span>vCPU Cores</span><span style="display:flex;gap:4px"><span class="preset-chip quick-edit-core" data-val="1">1C</span><span class="preset-chip quick-edit-core" data-val="2">2C</span><span class="preset-chip quick-edit-core" data-val="4">4C</span><span class="preset-chip quick-edit-core" data-val="8">8C</span><span class="preset-chip quick-edit-core" data-val="16">16C</span><span class="preset-chip quick-edit-core" data-val="32">32C</span></span></label><input name="cores" id="editCoresInput" type="number" min="1" max="128" value="${cores}" required></div>${isQemu ? `<div class="field"><label>CPU Sockets</label><input name="sockets" type="number" min="1" max="8" value="${sockets}"></div>` : `<div class="field"><label>CPU Limit / Quota <span class="muted small">(e.g. 1 = 1 core max, empty = unlimited)</span></label><input name="cpulimit" type="number" step="0.1" min="0" max="128" value="${esc(cpuLimit)}" placeholder="Unlimited"></div>`}</div>${isQemu ? `<div class="form-grid"><div class="field"><label>CPU Type / Emulation Model</label><select name="cpu">${cpuModelsHtml}</select></div><div class="field"><label>CPU Limit / Quota <span class="muted small">(cores limit, empty = unlimited)</span></label><input name="cpulimit" type="number" step="0.1" min="0" max="128" value="${esc(cpuLimit)}" placeholder="Unlimited"></div></div><div class="form-grid"><div class="field"><label>CPU Units / Weight <span class="muted small">(default 1024, range 8-500000)</span></label><input name="cpuunits" type="number" min="8" max="500000" value="${esc(cpuUnits)}" placeholder="1024"></div><div class="field" style="display:flex;align-items:center;padding-top:24px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="numa" ${numa ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable NUMA Architecture</b> <span class="muted small">(Non-Uniform Memory Access)</span></span></label></div></div>` : `<div class="field"><label>CPU Units / Priority Weight <span class="muted small">(default 1024)</span></label><input name="cpuunits" type="number" min="8" max="500000" value="${esc(cpuUnits)}" placeholder="1024"></div>`}` : `<div class="form-grid"><div class="field"><label>Allocated vCPU Cores</label><input value="${cores} vCPU Core(s)" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>Allocated Memory (RAM)</label><input value="${memory} MB (${formatBytes(memory * 1024 * 1024)})" disabled style="opacity:.7;cursor:not-allowed"></div></div><input type="hidden" name="cores" value="${cores}"><input type="hidden" name="memory" value="${memory}">`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>3. RAM & Memory Management</h4></div>${isAdmin ? `<div class="form-grid"><div class="field"><label style="display:flex;justify-content:space-between"><span>Memory (RAM in MB)</span><span style="display:flex;gap:4px"><span class="preset-chip quick-edit-ram" data-val="1024">1G</span><span class="preset-chip quick-edit-ram" data-val="2048">2G</span><span class="preset-chip quick-edit-ram" data-val="4096">4G</span><span class="preset-chip quick-edit-ram" data-val="8192">8G</span><span class="preset-chip quick-edit-ram" data-val="16384">16G</span><span class="preset-chip quick-edit-ram" data-val="32768">32G</span></span></label><input name="memory" id="editMemoryInput" type="number" min="256" step="128" value="${memory}" required></div>${isQemu ? `<div class="field"><label>Min RAM / Ballooning (MB) <span class="muted small">(0 to disable)</span></label><input name="balloon" type="number" min="0" step="128" value="${esc(balloon)}" placeholder="e.g. 1024 (leave empty to disable ballooning)"><span class="small muted">Dynamically shares unused memory with host</span></div>` : `<div class="field"><label style="display:flex;justify-content:space-between"><span>Swap Memory (MB)</span><span style="display:flex;gap:4px"><span class="preset-chip quick-edit-swap" data-val="0">0M</span><span class="preset-chip quick-edit-swap" data-val="512">512M</span><span class="preset-chip quick-edit-swap" data-val="1024">1G</span><span class="preset-chip quick-edit-swap" data-val="2048">2G</span><span class="preset-chip quick-edit-swap" data-val="4096">4G</span></span></label><input name="swap" id="editSwapInput" type="number" min="0" step="128" value="${swap}"></div>`}</div>` : `<div class="form-grid"><div class="field"><label>Memory (RAM)</label><input value="${memory} MB (${formatBytes(memory * 1024 * 1024)})" disabled style="opacity:.7;cursor:not-allowed"></div>${isLxc ? `<div class="field"><label>Swap Space</label><input value="${swap} MB" disabled style="opacity:.7;cursor:not-allowed"></div>` : ''}</div>`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><div><h4>4. ${ico("backup")} Primary Disk Volume, IOPS & Bandwidth Limits</h4><p class="muted small" style="margin:2px 0 0">Current provisioned size: <b>${currentDiskGb} GB</b> (Drive: <code>${esc(diskKey)}</code>)${!isAdmin ? ` · ${ico("lock", "sm")} Quota managed by administrator` : ''}</p></div></div>${isAdmin ? `<div class="form-grid"><div class="field"><label style="display:flex;justify-content:space-between"><span>Add Extra Disk Space (+GB)</span><span style="display:flex;gap:4px"><span class="preset-chip quick-add-disk" data-val="5">+5G</span><span class="preset-chip quick-add-disk" data-val="10">+10G</span><span class="preset-chip quick-add-disk" data-val="20">+20G</span><span class="preset-chip quick-add-disk" data-val="50">+50G</span><span class="preset-chip quick-add-disk" data-val="100">+100G</span></span></label><input name="addDiskGb" id="editAddDiskInput" type="number" min="0" max="5000" placeholder="e.g. 10 (adds 10GB online)"></div><div class="field"><label>Or Set New Total Size (GB)</label><input name="newTotalDiskGb" id="editNewTotalDiskInput" type="number" min="${currentDiskGb}" placeholder="e.g. ${currentDiskGb + 20}"><span class="small muted">Must be greater than current ${currentDiskGb} GB (online expansion).</span></div></div>${isQemu ? `<div class="form-grid" style="margin-top:12px"><div class="field"><label>Disk Cache Mode</label><select name="diskCache"><option value="writeback" ${diskOptions.cache === 'writeback' ? 'selected' : ''}>Write Back (Default - High Performance)</option><option value="none" ${diskOptions.cache === 'none' ? 'selected' : ''}>None (Direct I/O - Consistent / Safe)</option><option value="writethrough" ${diskOptions.cache === 'writethrough' ? 'selected' : ''}>Write Through (Strict Host Safety)</option><option value="directsync" ${diskOptions.cache === 'directsync' ? 'selected' : ''}>Direct Sync (Synchronous Writes)</option><option value="unsafe" ${diskOptions.cache === 'unsafe' ? 'selected' : ''}>Unsafe (Extreme Speed / Testing)</option></select></div><div class="field" style="display:flex;align-items:center;padding-top:24px;gap:20px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="discard" ${diskOptions.discard ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable Discard / TRIM</b> <span class="muted small">(frees host space)</span></span></label><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="ssd" ${diskOptions.ssd ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>SSD Emulation</b> <span class="muted small">(ssd=1)</span></span></label></div></div><div class="form-grid" style="margin-top:12px"><div class="field"><label>Read IO Bandwidth Limit (MB/s)</label><input name="mbps_rd" type="number" min="0" value="${esc(diskOptions.mbps_rd)}" placeholder="Unlimited (e.g. 50)"></div><div class="field"><label>Write IO Bandwidth Limit (MB/s)</label><input name="mbps_wr" type="number" min="0" value="${esc(diskOptions.mbps_wr)}" placeholder="Unlimited (e.g. 50)"></div></div><div class="form-grid" style="margin-top:12px"><div class="field"><label>Read IOPS Limit</label><input name="iops_rd" type="number" min="0" value="${esc(diskOptions.iops_rd)}" placeholder="Unlimited (e.g. 2000)"></div><div class="field"><label>Write IOPS Limit</label><input name="iops_wr" type="number" min="0" value="${esc(diskOptions.iops_wr)}" placeholder="Unlimited (e.g. 2000)"></div></div>` : ''}` : ''}<input type="hidden" name="currentDiskGb" value="${currentDiskGb}"><input type="hidden" name="diskKey" value="${esc(diskKey)}"></div><div class="panel" style="background:var(--panel2)"><div class="panel-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><h4>5. ${ico("network")} Network Adapter & Bandwidth Rate Limiter (${isLxc ? 'eth0' : 'net0'})</h4>${!isAdmin ? `<p class="muted small" style="margin:2px 0 0">Network interfaces, virtual bridge, and IP routing are locked and managed by the administrator.</p>` : ''}</div>${!isAdmin ? `<span class="tag" style="background:rgba(234,179,8,0.1);color:#fbbf24;border-color:rgba(234,179,8,0.25)">${ico("lock", "sm")} Locked (Admin Managed)</span>` : ''}</div>${isAdmin ? `<div class="form-grid"><div class="field"><label>Network Bridge</label><select name="bridge" required>${bridgesHtml}</select></div><div class="field"><label style="display:flex;justify-content:space-between"><span>Bandwidth Speed Limit (MB/s)</span><span style="display:flex;gap:4px"><span class="preset-chip quick-edit-rate" data-val="">Unlimited</span><span class="preset-chip quick-edit-rate" data-val="10">10MB/s (~80M)</span><span class="preset-chip quick-edit-rate" data-val="25">25MB/s (~200M)</span><span class="preset-chip quick-edit-rate" data-val="50">50MB/s (~400M)</span><span class="preset-chip quick-edit-rate" data-val="100">100MB/s</span></span></label><input name="netRate" id="editNetRateInput" type="number" step="0.5" min="0" value="${esc(netRate)}" placeholder="e.g. 10 (10 MB/s rate limit, blank = Unlimited)"><span class="small muted">Hardware rate limiter on VM interface (Proxmox <code>rate=X</code> in MB/s)</span></div></div><div class="form-grid" style="margin-top:12px"><div class="field"><label>VLAN Tag <span class="muted small">(optional)</span></label><input name="vlan" type="number" min="1" max="4094" value="${esc(currentVlan)}" placeholder="None / untagged"></div><div class="field"><label>Hardware MAC Address <span class="muted small">(optional)</span></label><input name="mac" value="${esc(currentMac)}" placeholder="Auto-generated by Proxmox"></div></div><div style="margin-top:12px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="firewall" ${currentFirewall ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable Proxmox VE Firewall</b> <span class="muted small">(Applies host firewall filters to this interface)</span></span></label></div><div style="margin:16px 0 8px"><label style="display:block;font-size:12px;color:#aaa;margin-bottom:8px">IPv4 Configuration:</label><div style="display:flex;gap:10px"><button type="button" id="editBtnIp4Dhcp" class="btn ${state.editVpsState.ip4Type === 'dhcp' ? 'primary' : 'ghost'}" style="flex:1;padding:9px;font-size:12px">${ico("statusDot", "sm")} DHCP (Automatic)</button><button type="button" id="editBtnIp4Static" class="btn ${state.editVpsState.ip4Type === 'static' ? 'primary' : 'ghost'}" style="flex:1;padding:9px;font-size:12px">${ico("statusDot", "sm")} Static IPv4 (CIDR / Gateway)</button></div></div><div id="editIp4StaticFields" class="${state.editVpsState.ip4Type === 'static' ? '' : 'hidden'} form-grid" style="margin-top:10px;background:var(--bg);padding:14px;border-radius:10px;border:1px solid var(--line)"><div class="field"><label>IPv4 Address / CIDR</label><input name="ip4Address" id="editIp4AddressInput" value="${esc(ip4Address)}" placeholder="e.g. 192.168.1.150/24"></div><div class="field"><label>IPv4 Gateway</label><input name="ip4Gateway" id="editIp4GatewayInput" value="${esc(ip4Gateway)}" placeholder="e.g. 192.168.1.1"></div></div><div style="margin:16px 0 8px"><div class="field"><label>IPv6 Configuration</label><select name="ip6Type" id="editIp6Select"><option value="auto" ${state.editVpsState.ip6Type === 'auto' ? 'selected' : ''}>SLAAC / Auto-Configuration (ip6=auto)</option><option value="dhcp" ${state.editVpsState.ip6Type === 'dhcp' ? 'selected' : ''}>DHCPv6 (ip6=dhcp)</option><option value="static" ${state.editVpsState.ip6Type === 'static' ? 'selected' : ''}>Static IPv6 (ip6=static)</option><option value="disabled" ${state.editVpsState.ip6Type === 'disabled' ? 'selected' : ''}>Disabled / None</option></select></div></div><div id="editIp6StaticFields" class="${state.editVpsState.ip6Type === 'static' ? '' : 'hidden'} form-grid" style="margin-top:10px;background:var(--bg);padding:14px;border-radius:10px;border:1px solid var(--line)"><div class="field"><label>IPv6 Address / CIDR</label><input name="ip6Address" id="editIp6AddressInput" value="${esc(ip6Address)}" placeholder="e.g. 2001:db8::10/64"></div><div class="field"><label>IPv6 Gateway</label><input name="ip6Gateway" id="editIp6GatewayInput" value="${esc(ip6Gateway)}" placeholder="e.g. 2001:db8::1"></div></div>` : `<div class="form-grid"><div class="field"><label>Assigned Network Bridge</label><input value="${esc(currentBridge || 'vmbr0')}" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>IPv4 Network Assignment</label><input value="${isIp4Static && ip4Address ? `${esc(ip4Address)}${ip4Gateway ? ' (GW: ' + esc(ip4Gateway) + ')' : ''}` : 'DHCP (Automatic IP)'}" disabled style="opacity:.7;cursor:not-allowed"></div></div><div class="form-grid"><div class="field"><label>IPv6 Network Assignment</label><input value="${ip6Type === 'static' && ip6Address ? `${esc(ip6Address)}${ip6Gateway ? ' (GW: ' + esc(ip6Gateway) + ')' : ''}` : (ip6Type === 'auto' ? 'SLAAC / Auto-Configuration' : (ip6Type === 'dhcp' ? 'DHCPv6' : 'Disabled / None'))}" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>Bandwidth Limit</label><input value="${netRate ? `${esc(netRate)} MB/s` : 'Unlimited / Host Port Speed'}" disabled style="opacity:.7;cursor:not-allowed"></div></div><div class="form-grid"><div class="field"><label>Hardware MAC Address</label><input value="${esc(currentMac || 'Auto-allocated by Proxmox')}" disabled style="opacity:.7;cursor:not-allowed"></div><div class="field"><label>VLAN & Firewall</label><input value="${currentVlan ? 'VLAN ' + esc(currentVlan) : 'Untagged'} · Firewall: ${currentFirewall ? 'Enabled' : 'Disabled'}" disabled style="opacity:.7;cursor:not-allowed"></div></div>`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>6. ${ico("network")} DNS Search Domain & Nameservers</h4></div><div class="form-grid"><div class="field"><label>DNS Search Domain</label><input name="searchDomain" value="${esc(searchDomain)}" placeholder="e.g. myvps.lan or company.local"></div><div class="field"><label>DNS Nameservers (space-separated)</label><input name="nameServers" value="${esc(nameServers)}" placeholder="e.g. 1.1.1.1 8.8.8.8"></div></div></div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>7. ${ico("lock")} Credentials & Authentication</h4></div>${isQemu ? `<div class="form-grid"><div class="field"><label>Cloud-Init User (Username)</label><input name="ciUser" value="${esc(ciUser)}" placeholder="root or ubuntu"></div><div class="field"><label style="display:flex;justify-content:space-between"><span>Set New Root Password <span class="muted small">(leave blank to keep unchanged)</span></span><a href="javascript:void(0)" id="editGenPassBtn" style="color:var(--accent);font-size:11px;font-weight:600">${ico("dice", "sm")} Generate Strong Password</a></label><div style="position:relative"><input name="password" id="editPassInput" type="password" minlength="8" placeholder="****************" style="padding-right:45px"><button type="button" id="editTogglePassBtn" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;color:#888;padding:4px 8px;font-size:13px">${ico("eye")}</button></div></div></div><div class="field"><label>SSH Public Key(s)</label><textarea name="sshKey" rows="2" placeholder="ssh-ed25519 AAAAC3... or ssh-rsa AAAAB3..." style="background:#0d0d0d;border:1px solid #303030;border-radius:8px;padding:9px;color:white;width:100%;font-size:11px;font-family:'Space Grotesk',monospace;resize:vertical">${esc(sshKey)}</textarea></div>` : `<div class="muted small" style="line-height:1.5;padding:4px 0">LXC Container root credentials and SSH keys were injected into the container's root filesystem during initial deployment. To deploy with new credentials or a clean image, use the <b>${ico("disc", "sm")} Reinstall OS</b> tab or update password inside the container via console (<code>passwd</code>).</div>`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>8. Proxmox Hypervisor Flags & Advanced Features</h4></div>${isAdmin ? `<div style="display:flex;flex-direction:column;gap:12px">${isQemu ? `<div class="form-grid"><div class="field"><label>Display / VGA Controller</label><select name="vga"><option value="serial0" ${vga === 'serial0' ? 'selected' : ''}>Serial 0 (Headless / Serial Console - Recommended)</option><option value="std" ${vga === 'std' ? 'selected' : ''}>Standard VGA (std)</option><option value="virtio" ${vga === 'virtio' ? 'selected' : ''}>VirtIO-GPU (virtio)</option><option value="qxl" ${vga === 'qxl' ? 'selected' : ''}>SPICE / QXL (qxl)</option><option value="vmware" ${vga === 'vmware' ? 'selected' : ''}>VMware Compatible (vmware)</option></select></div><div class="field"><label>BIOS Firmware</label><select name="bios"><option value="seabios" ${bios === 'seabios' ? 'selected' : ''}>SeaBIOS (Standard BIOS)</option><option value="ovmf" ${bios === 'ovmf' ? 'selected' : ''}>OVMF (UEFI Firmware)</option></select></div></div><div class="form-grid"><div class="field"><label>Machine Architecture</label><select name="machine"><option value="pc" ${machine === 'pc' ? 'selected' : ''}>i440fx (Standard PC)</option><option value="q35" ${machine === 'q35' ? 'selected' : ''}>q35 (Modern PCIe Architecture)</option></select></div><div class="field" style="display:flex;align-items:center;padding-top:24px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="qemuAgent" id="editAgentCheck" ${agent ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable QEMU Guest Agent</b> <span class="muted small">(required for live IP & memory reporting)</span></span></label></div></div>` : `<div class="form-grid"><div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="nesting" id="editNestingCheck" ${nesting ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable Nesting</b> <span class="muted small">(Allows Docker / LXD inside container)</span></span></label></div><div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="keyctl" id="editKeyctlCheck" ${keyctl ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable Keyctl</b> <span class="muted small">(Systemd keyring support)</span></span></label></div></div><div class="form-grid" style="margin-top:8px"><div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="fuse" id="editFuseCheck" ${fuse ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable FUSE</b> <span class="muted small">(FUSE filesystems)</span></span></label></div><div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="mknod" id="editMknodCheck" ${mknod ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Enable Mknod</b> <span class="muted small">(Device node creation)</span></span></label></div></div>`}</div>` : `<div style="display:flex;flex-direction:column;gap:10px">${isLxc ? `<div style="display:flex;align-items:center;gap:8px"><span class="tag">${nesting ? 'Nesting Active' : 'Nesting Disabled'}</span><span class="muted small">Docker & nested container virtualization support</span></div>` : ''}${isQemu ? `<div style="display:flex;align-items:center;gap:8px"><span class="tag">${agent ? 'Guest Agent Active' : 'Agent Inactive'}</span><span class="muted small">Live hypervisor guest communication</span></div>` : ''}</div>`}</div><div class="panel" style="background:var(--panel2)"><div class="panel-title"><h4>9. ${ico("rocket")} Startup, Boot Sequence & Autostart Policies</h4></div><div class="form-grid"><div class="field" style="display:flex;align-items:center;padding-top:16px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" name="onboot" id="editOnbootCheck" ${onboot ? 'checked' : ''} style="width:auto;cursor:pointer"><span><b>Start at Host Boot (onboot)</b><br><span class="muted small">Automatically power on this VPS when physical host boots</span></span></label></div>${isAdmin ? `<div class="field"><label>Startup Order Priority <span class="muted small">(order=1..99)</span></label><input name="startupOrder" type="number" min="0" max="99" value="${esc(startupOrder)}" placeholder="e.g. 1 (lower starts first)"></div>` : `<div class="field"><label>Startup Policy</label><input value="${onboot ? 'Automatic on host boot' : 'Manual start'}" disabled style="opacity:.7;cursor:not-allowed"></div>`}</div>${isAdmin ? `<div class="form-grid" style="margin-top:12px"><div class="field"><label>Boot Up Delay (Seconds) <span class="muted small">(up delay)</span></label><input name="startupUp" type="number" min="0" max="3600" value="${esc(startupUp)}" placeholder="e.g. 30"></div><div class="field"><label>Shutdown Delay (Seconds) <span class="muted small">(down delay)</span></label><input name="startupDown" type="number" min="0" max="3600" value="${esc(startupDown)}" placeholder="e.g. 30"></div></div>` : ''}${isQemu && isAdmin ? `<div class="field" style="margin-top:12px"><label>Boot Device Order <span class="muted small">(e.g. <code>order=scsi0;net0</code> or <code>order=sata0;ide2</code>)</span></label><input name="boot" value="${esc(cfg.boot || 'order=scsi0;net0')}" placeholder="order=scsi0;net0"><span class="small muted">Configures QEMU BIOS boot device priorities</span></div>` : ''}</div><div style="display:flex;gap:12px;align-items:center;margin-top:6px"><button type="submit" class="btn primary" id="editVpsSubmitBtn" style="padding:13px 34px;font-size:14px;font-weight:700">${ico("backup")} Save & Apply Changes</button><button type="button" class="btn ghost" data-action="vps-tab" data-tab="specs" style="padding:13px 20px">Cancel</button></div><div id="editProgressNotice" class="hidden notice" style="border-color:rgba(34,197,94,0.2);background:rgba(34,197,94,0.05);color:#86efac;padding:16px;border-radius:12px"><div style="font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px"><span>${ico("spinner", "spin")}</span> Applying configuration updates to Proxmox VE…</div><div style="font-size:12px;margin-top:6px;line-height:1.5">Sending hardware resize and network commands to node. Please do not close this window (takes approximately 5-15 seconds).</div></div></form>`;
     setupEditVpsEvents(id, d);
   } catch (err) { wrap.innerHTML = `<div class="empty">Error loading configuration for editing: ${esc(err.message)}</div>`; }
 }
@@ -3199,6 +3376,14 @@ function setupEditVpsEvents(id, d) {
         else { ip6Fields.classList.add("hidden"); }
       };
     }
+    document.querySelectorAll(".quick-edit-rate").forEach(a => {
+      a.onclick = () => {
+        const inp = $("#editNetRateInput");
+        if (inp) inp.value = a.dataset.val;
+        document.querySelectorAll(".quick-edit-rate").forEach(c => c.classList.remove("active"));
+        a.classList.add("active");
+      };
+    });
   }
   document.querySelectorAll(".quick-edit-core").forEach(a => {
     a.onclick = () => {
@@ -3263,13 +3448,26 @@ function setupEditVpsEvents(id, d) {
         userId: fd.get("userId") ? Number(fd.get("userId")) : undefined,
         cores: Number(fd.get("cores")),
         sockets: fd.get("sockets") ? Number(fd.get("sockets")) : 1,
+        cpu: isAdmin && fd.get("cpu") ? String(fd.get("cpu")).trim() : undefined,
+        cpulimit: isAdmin ? (fd.get("cpulimit") || "").trim() : undefined,
+        cpuunits: isAdmin ? (fd.get("cpuunits") || "").trim() : undefined,
+        numa: isAdmin ? (fd.get("numa") === "on" || fd.get("numa") === true) : undefined,
         memory: Number(fd.get("memory")),
+        balloon: isAdmin ? (fd.get("balloon") || "").trim() : undefined,
         swap: fd.get("swap") ? Number(fd.get("swap")) : 0,
         addDiskGb: Number(fd.get("addDiskGb") || 0),
         newTotalDiskGb: Number(fd.get("newTotalDiskGb") || 0),
         currentDiskGb: Number(fd.get("currentDiskGb") || 0),
         diskKey: fd.get("diskKey") || "scsi0",
+        diskCache: isAdmin ? fd.get("diskCache") : undefined,
+        discard: isAdmin ? (fd.get("discard") === "on" || fd.get("discard") === true) : undefined,
+        ssd: isAdmin ? (fd.get("ssd") === "on" || fd.get("ssd") === true) : undefined,
+        mbps_rd: isAdmin ? (fd.get("mbps_rd") || "").trim() : undefined,
+        mbps_wr: isAdmin ? (fd.get("mbps_wr") || "").trim() : undefined,
+        iops_rd: isAdmin ? (fd.get("iops_rd") || "").trim() : undefined,
+        iops_wr: isAdmin ? (fd.get("iops_wr") || "").trim() : undefined,
         bridge: isAdmin ? fd.get("bridge") : undefined,
+        netRate: isAdmin ? (fd.get("netRate") || "").trim() : undefined,
         vlan: isAdmin && fd.get("vlan") ? Number(fd.get("vlan")) : undefined,
         mac: isAdmin ? (fd.get("mac") || "").trim() : undefined,
         firewall: isAdmin ? (fd.get("firewall") === "on" || fd.get("firewall") === true) : undefined,
@@ -3284,10 +3482,18 @@ function setupEditVpsEvents(id, d) {
         ciUser: (fd.get("ciUser") || "").trim(),
         password: (fd.get("password") || "").trim(),
         sshKey: (fd.get("sshKey") || "").trim(),
-        nesting: fd.get("nesting") === "on" || fd.get("nesting") === true,
         qemuAgent: fd.get("qemuAgent") === "on" || fd.get("qemuAgent") === true,
+        vga: isAdmin ? fd.get("vga") : undefined,
+        bios: isAdmin ? fd.get("bios") : undefined,
+        machine: isAdmin ? fd.get("machine") : undefined,
+        nesting: fd.get("nesting") === "on" || fd.get("nesting") === true,
+        keyctl: fd.get("keyctl") === "on" || fd.get("keyctl") === true,
+        fuse: fd.get("fuse") === "on" || fd.get("fuse") === true,
+        mknod: fd.get("mknod") === "on" || fd.get("mknod") === true,
         onboot: fd.get("onboot") === "on" || fd.get("onboot") === true,
-        startup: (fd.get("startup") || "").trim(),
+        startupOrder: isAdmin ? (fd.get("startupOrder") || "").trim() : undefined,
+        startupUp: isAdmin ? (fd.get("startupUp") || "").trim() : undefined,
+        startupDown: isAdmin ? (fd.get("startupDown") || "").trim() : undefined,
         boot: (fd.get("boot") || "").trim()
       };
       if (payload.password && payload.password.length < 8) { toast("New root password must be at least 8 characters.", "error"); return; }
@@ -3337,8 +3543,13 @@ function showModal(html, extraClass = "") {
     }
     $("#modalRoot").innerHTML = "";
   };
-  const closeBtn = $("#modalRoot [data-close]");
-  if (closeBtn) closeBtn.onclick = closeModal;
+  window.closeModal = closeModal;
+  $("#modalRoot").querySelectorAll("[data-close]").forEach(btn => {
+    btn.onclick = e => {
+      if (e) e.preventDefault();
+      closeModal();
+    };
+  });
   const backdrop = $("#modalRoot .modal-backdrop");
   if (backdrop) backdrop.onclick = e => { if (e.target === backdrop) closeModal(); };
   $("#modalRoot").querySelectorAll("[data-modal-power]").forEach(b => b.onclick = () => serverAction(Number(b.dataset.id), b.dataset.modalPower));
@@ -3579,7 +3790,32 @@ function modalPrompt({
 window.addEventListener("keydown", e => {
   if ($("#confirmRoot") && $("#confirmRoot").innerHTML) return;
   if (e.key === "Escape" && $("#modalRoot").innerHTML) {
-    $("#modalRoot").innerHTML = "";
+    if (typeof window.closeModal === "function") {
+      window.closeModal();
+    } else {
+      if (window._activeConsoleCleanup) {
+        try { window._activeConsoleCleanup(); } catch(err){}
+        window._activeConsoleCleanup = null;
+      }
+      $("#modalRoot").innerHTML = "";
+    }
+  }
+});
+
+document.addEventListener("click", e => {
+  const closeTarget = e.target.closest && e.target.closest("#modalRoot [data-close]");
+  if (closeTarget) {
+    e.preventDefault();
+    if (typeof window.closeModal === "function") {
+      window.closeModal();
+    } else {
+      if (window._activeConsoleCleanup) {
+        try { window._activeConsoleCleanup(); } catch(err){}
+        window._activeConsoleCleanup = null;
+      }
+      const mr = document.getElementById("modalRoot");
+      if (mr) mr.innerHTML = "";
+    }
   }
 });
 
@@ -3755,6 +3991,8 @@ async function openXtermConsole(id) {
         </span>
       </div>
       <div class="terminal-modal-actions">
+        <button id="btnTermCopy" title="Copy all terminal output or selection to clipboard">${ico("clipboard", "sm")} Copy Text</button>
+        <button id="btnTermEnter" title="Send Enter / Return to console">${ico("cornerDownLeft", "sm")} Enter</button>
         <button id="btnTermCtrlC" title="Send Ctrl+C interrupt signal">${ico("code", "sm")} Ctrl+C</button>
         <button id="btnTermCad" title="Send Ctrl+Alt+Del signal">${ico("refresh", "sm")} Ctrl+Alt+Del</button>
         <button id="btnTermClear" title="Clear terminal screen">${ico("trash", "sm")} Clear</button>
@@ -3784,6 +4022,7 @@ async function openXtermConsole(id) {
   let fitAddon = null;
   let ws = null;
   let resizeObserver = null;
+  let domObserver = null;
   let keepAliveInterval = null;
 
   const setStatus = (st, text) => {
@@ -3795,6 +4034,7 @@ async function openXtermConsole(id) {
   const cleanupSession = () => {
     if (keepAliveInterval) { clearInterval(keepAliveInterval); keepAliveInterval = null; }
     if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
+    if (domObserver) { try { domObserver.disconnect(); } catch (e) {} domObserver = null; }
     if (ws) {
       try {
         ws.onopen = null;
@@ -3812,6 +4052,66 @@ async function openXtermConsole(id) {
   };
 
   window._activeConsoleCleanup = cleanupSession;
+
+  function getTerminalCleanText(t) {
+    if (!t || !t.buffer || !t.buffer.active) return "";
+    const b = t.buffer.active;
+    const lines = [];
+    for (let i = 0; i < b.length; i++) {
+      const line = b.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+    return lines.join("\n");
+  }
+
+  function copyTextToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  }
+
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch(e){}
+    document.body.removeChild(ta);
+  }
+
+  // Copy Output button
+  const copyBtn = $("#btnTermCopy");
+  if (copyBtn) {
+    copyBtn.onclick = () => {
+      if (!term) return;
+      let text = term.getSelection();
+      if (!text || text.trim().length === 0) {
+        text = getTerminalCleanText(term);
+      }
+      if (text && text.trim().length > 0) {
+        copyTextToClipboard(text);
+        toast(`Copied ${text.length} characters of terminal output!`);
+      } else {
+        toast("No terminal text to copy yet.", "warning");
+      }
+    };
+  }
+
+  // Enter button
+  const enterBtn = $("#btnTermEnter");
+  if (enterBtn) {
+    enterBtn.onclick = () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "input", data: "\r" }));
+        if (term) term.focus();
+      }
+    };
+  }
 
   // Fullscreen button
   const fsBtn = $("#btnTermFullscreen");
@@ -3906,7 +4206,7 @@ async function openXtermConsole(id) {
           background: "#050811",
           foreground: "#e2e8f0",
           cursor: "#38bdf8",
-          selectionBackground: "rgba(99, 102, 241, 0.4)",
+          selectionBackground: "rgba(99, 102, 241, 0.45)",
           black: "#050811",
           red: "#ef4444",
           green: "#22c55e",
@@ -3933,13 +4233,107 @@ async function openXtermConsole(id) {
       term.open(mountEl);
       fitAddon.fit();
 
+      // Keyboard handler: Ctrl+C copies selection if text selected, else sends interrupt; Ctrl+V pastes
+      term.attachCustomKeyEventHandler((e) => {
+        if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C") && e.type === "keydown") {
+          const sel = term.getSelection();
+          if (sel && sel.length > 0) {
+            copyTextToClipboard(sel);
+            toast("Selected text copied to clipboard!");
+            return false;
+          }
+          return true;
+        }
+        if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V") && e.type === "keydown") {
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            navigator.clipboard.readText().then(pasted => {
+              if (pasted && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "input", data: pasted }));
+              }
+            }).catch(() => {});
+            return false;
+          }
+        }
+        return true;
+      });
+
+      // Click to focus anywhere inside terminal container
+      mountEl.addEventListener("click", () => { if (term) term.focus(); });
+      const containerEl = document.getElementById("terminalScreenContainer");
+      if (containerEl) {
+        containerEl.addEventListener("click", () => { if (term) term.focus(); });
+      }
+
+      // Zero-glitch DOM Sanitizer: keeps helper textarea hidden from view and measurement element invisible
+      const sanitizeTerminalDOM = () => {
+        try {
+          const helpers = mountEl.querySelectorAll(".xterm-helpers, .xterm-helper-textarea, textarea, .xterm-char-measure-element, [class*='char-measure']");
+          helpers.forEach(el => {
+            if (el.tagName === "TEXTAREA" || el.classList.contains("xterm-helper-textarea")) {
+              el.style.setProperty("opacity", "0", "important");
+              el.style.setProperty("position", "absolute", "important");
+              el.style.setProperty("left", "-9999em", "important");
+              el.style.setProperty("top", "0px", "important");
+              el.style.setProperty("width", "0px", "important");
+              el.style.setProperty("height", "0px", "important");
+              el.style.setProperty("padding", "0px", "important");
+              el.style.setProperty("margin", "0px", "important");
+              el.style.setProperty("background", "transparent", "important");
+              el.style.setProperty("background-color", "transparent", "important");
+              el.style.setProperty("border", "none", "important");
+              el.style.setProperty("outline", "none", "important");
+              el.style.setProperty("resize", "none", "important");
+              el.style.setProperty("box-shadow", "none", "important");
+              el.style.setProperty("color", "transparent", "important");
+              el.style.setProperty("-webkit-appearance", "none", "important");
+              el.style.setProperty("appearance", "none", "important");
+              el.style.setProperty("z-index", "-5", "important");
+            } else if (el.classList.contains("xterm-char-measure-element") || (el.className && typeof el.className === "string" && el.className.includes("char-measure"))) {
+              el.style.setProperty("display", "inline-block", "important");
+              el.style.setProperty("visibility", "hidden", "important");
+              el.style.setProperty("position", "absolute", "important");
+              el.style.setProperty("left", "-9999em", "important");
+              el.style.setProperty("top", "0px", "important");
+              el.style.setProperty("opacity", "0", "important");
+              el.style.setProperty("color", "transparent", "important");
+              el.style.setProperty("pointer-events", "none", "important");
+              el.style.setProperty("user-select", "none", "important");
+            } else if (el.classList.contains("xterm-helpers")) {
+              el.style.setProperty("position", "absolute", "important");
+              el.style.setProperty("left", "0px", "important");
+              el.style.setProperty("top", "0px", "important");
+              el.style.setProperty("z-index", "10", "important");
+            }
+          });
+        } catch (_) {}
+      };
+
+      sanitizeTerminalDOM();
+      if (window.MutationObserver) {
+        if (domObserver) { try { domObserver.disconnect(); } catch (_) {} }
+        domObserver = new MutationObserver(() => sanitizeTerminalDOM());
+        domObserver.observe(mountEl, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+      }
+
+      let lastCols = 0;
+      let lastRows = 0;
+      const sendResize = (cols, rows) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const c = Math.max(10, Math.min(500, Number(cols) || 80));
+        const r = Math.max(5, Math.min(200, Number(rows) || 24));
+        if (c === lastCols && r === lastRows) return;
+        lastCols = c;
+        lastRows = r;
+        ws.send(JSON.stringify({ type: "resize", cols: c, rows: r }));
+      };
+
       const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${wsProto}//${location.host}/ws/console?session=${encodeURIComponent(res.sessionId)}`;
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         fitAddon.fit();
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        sendResize(term.cols, term.rows);
 
         keepAliveInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -3957,7 +4351,7 @@ async function openXtermConsole(id) {
               if (overlayBanner) overlayBanner.style.display = "none";
               term.focus();
               fitAddon.fit();
-              ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+              sendResize(term.cols, term.rows);
             } else if (msg.status === "disconnected") {
               setStatus("disconnected", "Disconnected");
             }
@@ -3995,9 +4389,7 @@ async function openXtermConsole(id) {
       });
 
       term.onResize((size) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
-        }
+        sendResize(size.cols, size.rows);
       });
 
       if (window.ResizeObserver) {
@@ -4047,6 +4439,15 @@ async function openXtermConsole(id) {
   }
 
   async function ensureXtermAvailable() {
+    // Dynamic ensure CSS is loaded
+    if (!document.getElementById("xterm-dynamic-cdn-css")) {
+      const link = document.createElement("link");
+      link.id = "xterm-dynamic-cdn-css";
+      link.rel = "stylesheet";
+      link.href = "https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css";
+      document.head.appendChild(link);
+    }
+
     let Term = getTerminalCtor();
     let Fit = getFitAddonCtor();
     if (Term && Fit) return { Term, Fit };
@@ -4253,7 +4654,124 @@ function setupTaskFilterEvents(allTasks) {
 async function usersPage(c) {
   const d = await api("/admin/users");
   window._atyroUsers = d.users;
-  c.innerHTML = `<div class="page-head"><div><h1>User management</h1><p>Create user accounts and manage panel access permissions.</p></div><button class="btn primary" data-action="add-user">${ico("plus")} Create user</button></div><div class="panel table-wrap"><table><thead><tr><th>USER</th><th>EMAIL</th><th>ROLE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">#${u.id}</div></td><td>${esc(u.email)}</td><td><span class="tag">${esc(u.role)}</span></td><td>${u.active ? `<span class="badge" style="background:rgba(34,197,94,0.1);color:var(--green);border-color:rgba(34,197,94,0.3)">${ico("statusDot", "sm")} Active</span>` : `<span class="badge" style="background:rgba(239,68,68,0.1);color:var(--red);border-color:rgba(239,68,68,0.3)">${ico("statusDot", "sm")} Disabled</span>`}</td><td><button class="btn small" data-action="toggle-user" data-id="${u.id}" data-active="${u.active ? 1 : 0}">${u.active ? "Disable" : "Enable"}</button> <button class="btn small danger" data-action="delete-user" data-id="${u.id}">Delete</button></td></tr>`).join("")}</tbody></table></div>`;
+  c.innerHTML = `<div class="page-head"><div><h1>User management</h1><p>Create user accounts and manage panel access permissions.</p></div><button class="btn primary" data-action="add-user">${ico("plus")} Create user</button></div><div class="panel table-wrap"><table><thead><tr><th>USER</th><th>EMAIL</th><th>ROLE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>${d.users.map(u => `<tr><td><b>${esc(u.username)}</b><div class="small muted">#${u.id}</div></td><td>${esc(u.email)}</td><td><span class="tag">${esc(u.role)}</span></td><td>${u.active ? `<span class="badge" style="background:rgba(34,197,94,0.1);color:var(--green);border-color:rgba(34,197,94,0.3)">${ico("statusDot", "sm")} Active</span>` : `<span class="badge" style="background:rgba(239,68,68,0.1);color:var(--red);border-color:rgba(239,68,68,0.3)">${ico("statusDot", "sm")} Disabled</span>`}</td><td><button class="btn small" data-action="edit-user" data-id="${u.id}">${ico("edit", "sm")} Edit</button> <button class="btn small" data-action="toggle-user" data-id="${u.id}" data-active="${u.active ? 1 : 0}">${u.active ? "Disable" : "Enable"}</button> <button class="btn small danger" data-action="delete-user" data-id="${u.id}">${ico("trash", "sm")} Delete</button></td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function editUserModal(id) {
+  const u = (window._atyroUsers || []).find(x => x.id === id);
+  if (!u) return toast("User not found.", "error");
+
+  showModal(`
+    <div class="modal-head">
+      <h3>${ico("edit")} Edit User Account: ${esc(u.username)}</h3>
+      <button class="close" data-close>×</button>
+    </div>
+    <form id="editUserForm">
+      <div class="field">
+        <label>Username</label>
+        <input name="username" id="editUsername" required minlength="3" maxlength="32" value="${esc(u.username)}" placeholder="e.g. john_doe">
+        <span class="small muted">3–32 characters (letters, numbers, hyphens, periods, underscores).</span>
+      </div>
+      <div class="field">
+        <label>Email Address</label>
+        <input name="email" id="editEmail" type="email" value="${esc(u.email)}" placeholder="john@example.com" required>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Account Role</label>
+          <select name="role" id="editRole">
+            <option value="user" ${u.role === "user" ? "selected" : ""}>Standard User</option>
+            <option value="admin" ${u.role === "admin" ? "selected" : ""}>Administrator</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Account Status</label>
+          <select name="active" id="editActive">
+            <option value="1" ${u.active ? "selected" : ""}>Active (Access Granted)</option>
+            <option value="0" ${!u.active ? "selected" : ""}>Disabled (Access Blocked)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label style="display:flex;justify-content:space-between">
+          <span>Reset Password <span class="muted small">(leave blank to keep current)</span></span>
+          <a href="javascript:void(0)" id="genPassUserBtn" style="color:var(--accent);font-size:11px;font-weight:600">${ico("dice", "sm")} Generate Strong Password</a>
+        </label>
+        <div style="position:relative">
+          <input name="password" id="editUserPassInput" type="password" minlength="8" placeholder="Enter new password (optional)" style="padding-right:45px" autocomplete="new-password">
+          <button type="button" id="editUserTogglePassBtn" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;color:#888;padding:4px 8px;font-size:13px">${ico("eye")}</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button type="submit" class="btn primary" id="editUserSubmitBtn" style="flex:1">${ico("check")} Save Changes</button>
+        <button type="button" class="btn ghost" data-close id="editUserCancelBtn" onclick="if(window.closeModal){window.closeModal();}else{document.getElementById('modalRoot').innerHTML='';}">Cancel</button>
+      </div>
+    </form>
+  `);
+
+  const cancelBtn = $("#editUserCancelBtn");
+  if (cancelBtn) {
+    cancelBtn.onclick = (e) => {
+      e.preventDefault();
+      if (typeof window.closeModal === "function") window.closeModal();
+      else $("#modalRoot").innerHTML = "";
+    };
+  }
+
+  const passInp = $("#editUserPassInput"), togBtn = $("#editUserTogglePassBtn");
+  if (togBtn && passInp) {
+    togBtn.onclick = () => {
+      passInp.type = passInp.type === "password" ? "text" : "password";
+    };
+  }
+  const genBtn = $("#genPassUserBtn");
+  if (genBtn && passInp) {
+    genBtn.onclick = () => {
+      const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*";
+      let p = "";
+      for (let i = 0; i < 14; i++) p += chars[Math.floor(Math.random() * chars.length)];
+      passInp.type = "text";
+      passInp.value = p;
+      toast("Generated strong password!", "info");
+    };
+  }
+
+  const form = $("#editUserForm");
+  if (form) {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const submitBtn = $("#editUserSubmitBtn");
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `${ico("spinner", "spin sm")} Saving…`;
+      }
+      const fd = new FormData(form);
+      const payload = {
+        username: fd.get("username")?.trim(),
+        email: fd.get("email")?.trim(),
+        role: fd.get("role"),
+        active: fd.get("active") === "1"
+      };
+      const pass = fd.get("password")?.trim();
+      if (pass) payload.password = pass;
+
+      try {
+        await api(`/admin/users/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload)
+        });
+        $("#modalRoot").innerHTML = "";
+        toast(`User "${payload.username}" updated successfully!`, "success");
+        await renderPage();
+      } catch (err) {
+        toast(err.message, "error");
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = `${ico("check")} Save Changes`;
+        }
+      }
+    };
+  }
 }
 
 function userModal() {
@@ -5713,7 +6231,13 @@ async function profilePage(c) {
 
           ${stats.servers && stats.servers.length > 0 ? `
             <div style="display:flex;flex-direction:column;gap:8px">
-              ${stats.servers.map(s => `
+              ${stats.servers.map(s => {
+                const matched = (state.servers || []).find(x => x.id === s.id || (Number(x.vmid) === Number(s.vmid)));
+                const st = (s.status && s.status !== "unknown") ? s.status : (matched?.status || s.status || "stopped");
+                const isRun = st === "running";
+                const borderClr = isRun ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)";
+                const textClr = isRun ? "var(--green)" : "var(--red)";
+                return `
                 <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px">
                   <div style="display:flex;align-items:center;gap:10px;min-width:0">
                     <span style="color:${s.type === 'qemu' ? 'var(--accent)' : 'var(--blue)'}">${ico(s.type === 'qemu' ? 'kvm' : 'lxc')}</span>
@@ -5723,13 +6247,13 @@ async function profilePage(c) {
                     </div>
                   </div>
                   <div style="display:flex;align-items:center;gap:8px">
-                    <span class="tag small" style="border-color:${s.status === 'running' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'};color:${s.status === 'running' ? 'var(--green)' : 'var(--red)'}">
-                      ${ico("statusDot", "sm")} ${esc(s.status || 'unknown')}
+                    <span class="tag small profile-status-badge-${s.id}" style="border-color:${borderClr};color:${textClr};text-transform:capitalize">
+                      ${ico("statusDot", "sm")} ${esc(st)}
                     </span>
                     <button type="button" class="btn small ghost" data-action="server" data-id="${s.id}">Manage ${ico("arrowRight", "sm")}</button>
                   </div>
                 </div>
-              `).join('')}
+              `;}).join('')}
             </div>
           ` : `
             <div class="empty" style="padding:24px;border:1px dashed var(--line);border-radius:10px;background:var(--panel2)">
@@ -6161,6 +6685,7 @@ async function settingsPage(c) {
   const siteBgUrl = s?.site_bg_url || "";
   const siteBgOpacity = s?.site_bg_opacity !== undefined ? Number(s?.site_bg_opacity) : 55;
   const siteBgBlur = s?.site_bg_blur !== undefined ? Number(s?.site_bg_blur) : 0;
+  const allowRegistration = s?.allow_registration === "1" || s?.allow_registration === true || s?.allow_registration === "true";
   state.settingsCustomBgType = siteBgType;
 
   c.innerHTML = `
@@ -6211,6 +6736,43 @@ async function settingsPage(c) {
               ? `<img class="brand-logo-img" id="previewBrandLogoImg" src="${esc(siteIcon)}" alt="Logo">` 
               : `<span class="brand-mark" id="previewBrandMarkLetter">${esc((siteName[0] || 'A').toUpperCase())}</span>`}
             <span id="previewBrandNameText">${esc(siteName)}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- CARD: PUBLIC USER REGISTRATION & ACCESS CONTROL -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <div class="settings-card-icon" style="color:var(--green);background:rgba(34,197,94,0.12);border-color:rgba(34,197,94,0.25)">${ico("users", "lg")}</div>
+          <div class="settings-card-title">
+            <h3>Public User Registration</h3>
+            <p>Allow visitors to self-register new accounts or restrict platform access to invite-only</p>
+          </div>
+        </div>
+
+        <div style="background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:20px;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap">
+          <div style="max-width:560px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+              <span style="font-weight:700;font-size:15px;color:#fff">Registration Status:</span>
+              <span id="regStatusBadge" class="badge" style="font-size:12px;font-weight:700;padding:4px 10px;background:${allowRegistration ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'};color:${allowRegistration ? 'var(--green)' : 'var(--red)'};border:1px solid ${allowRegistration ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}">
+                ${allowRegistration ? `${ico("statusDot", "sm")} Enabled (Open to Public)` : `${ico("ban", "sm")} Disabled (Invite Only)`}
+              </span>
+            </div>
+            <p class="muted small" style="margin:0;line-height:1.5" id="regStatusHelp">
+              ${allowRegistration 
+                ? '<b>Registration is Open:</b> Visitors can click "Register" on the sign-in page to create their own accounts.' 
+                : '<b>Registration is Disabled:</b> The "Register" tab is hidden from visitors. Only administrators can create accounts in User Management.'}
+            </p>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:10px">
+            <button type="button" class="btn ${allowRegistration ? 'ghost' : 'danger'}" id="btnDisableReg" style="padding:10px 18px;font-weight:600">
+              ${ico("ban", "sm")} Disable Registration
+            </button>
+            <button type="button" class="btn ${allowRegistration ? 'primary' : 'ghost'}" id="btnEnableReg" style="padding:10px 18px;font-weight:600">
+              ${ico("check", "sm")} Enable Registration
+            </button>
+            <input type="hidden" name="allow_registration" id="setting_allow_registration" value="${allowRegistration ? '1' : '0'}">
           </div>
         </div>
       </div>
@@ -6880,6 +7442,50 @@ function initSettingsControllers() {
     };
   }
 
+  // Public Registration Toggle Controller
+  const btnEnableReg = $("#btnEnableReg");
+  const btnDisableReg = $("#btnDisableReg");
+  const inpAllowReg = $("#setting_allow_registration");
+  const regBadge = $("#regStatusBadge");
+  const regHelp = $("#regStatusHelp");
+
+  const setRegUI = (enabled) => {
+    if (inpAllowReg) inpAllowReg.value = enabled ? "1" : "0";
+    if (btnEnableReg && btnDisableReg) {
+      if (enabled) {
+        btnEnableReg.className = "btn primary";
+        btnDisableReg.className = "btn ghost";
+      } else {
+        btnEnableReg.className = "btn ghost";
+        btnDisableReg.className = "btn danger";
+      }
+    }
+    if (regBadge) {
+      regBadge.style.background = enabled ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)";
+      regBadge.style.color = enabled ? "var(--green)" : "var(--red)";
+      regBadge.style.borderColor = enabled ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)";
+      regBadge.innerHTML = enabled ? `${ico("statusDot", "sm")} Enabled (Open to Public)` : `${ico("ban", "sm")} Disabled (Invite Only)`;
+    }
+    if (regHelp) {
+      regHelp.innerHTML = enabled 
+        ? '<b>Registration is Open:</b> Visitors can click "Register" on the sign-in page to create their own accounts.' 
+        : '<b>Registration is Disabled:</b> The "Register" tab is hidden from visitors. Only administrators can create accounts in User Management.';
+    }
+  };
+
+  if (btnEnableReg) {
+    btnEnableReg.onclick = () => {
+      setRegUI(true);
+      toast("Public registration set to ENABLED. Click 'Save Changes' to permanently save.", "info");
+    };
+  }
+  if (btnDisableReg) {
+    btnDisableReg.onclick = () => {
+      setRegUI(false);
+      toast("Public registration set to DISABLED. Click 'Save Changes' to permanently save.", "info");
+    };
+  }
+
   // Save Settings Button
   const saveBtn = $("#saveSettingsBtn");
   if (saveBtn) {
@@ -6895,6 +7501,7 @@ function initSettingsControllers() {
         site_favicon_url: inpSiteFavicon?.value?.trim() || "/favicon.ico",
         og_image_url: inpOgImage?.value?.trim() || "",
         seo_description: inpSeoDesc?.value?.trim() || "",
+        allow_registration: inpAllowReg?.value || "0",
         site_bg_type: state.settingsCustomBgType || "none",
         site_bg_url: inpSiteBgUrl?.value?.trim() || "",
         site_bg_opacity: inpSiteBgOpacity?.value || "55",
@@ -6937,6 +7544,7 @@ function initSettingsControllers() {
         site_favicon_url: "/favicon.ico",
         og_image_url: "",
         seo_description: "High-Performance Cloud & VPS Infrastructure Management",
+        allow_registration: "0",
         site_bg_type: "none",
         site_bg_url: "",
         site_bg_opacity: "55",
@@ -7118,6 +7726,14 @@ function onLiveBatchStats(batch) {
     const pill = $(`#server-status-${st.id}`);
     if (pill) {
       pill.innerHTML = `<i class="dot ${dotClass}"></i><span style="color:${statusColor};font-weight:600;text-transform:capitalize">${statusText}</span>`;
+    }
+
+    const pBadge = $(`.profile-status-badge-${st.id}`);
+    if (pBadge) {
+      const borderClr = isRunning ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)";
+      pBadge.style.borderColor = borderClr;
+      pBadge.style.color = statusColor;
+      pBadge.innerHTML = `${ico("statusDot", "sm")} ${statusText}`;
     }
 
     const card = pill ? pill.closest(".server-card") : $(`#server-card-${st.id}`);

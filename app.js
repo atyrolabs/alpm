@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS servers (
   pve_node TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(node_id, vmid)
+  UNIQUE(node_id, vmid, user_id)
 );
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +99,37 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_servers_user ON servers(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
 `);
+
+// Migration: Allow assigning one VPS to multiple users (UNIQUE on node_id, vmid, user_id)
+try {
+  const tbl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='servers'").get();
+  if (tbl && tbl.sql && (tbl.sql.includes("UNIQUE(node_id, vmid)") || tbl.sql.includes("UNIQUE(node_id,vmid)") || tbl.sql.includes("UNIQUE (node_id, vmid)"))) {
+    db.pragma("foreign_keys = OFF");
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS servers_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE RESTRICT,
+          vmid INTEGER NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('qemu','lxc')),
+          pve_node TEXT NOT NULL DEFAULT '',
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(node_id, vmid, user_id)
+        );
+        INSERT INTO servers_new (id, user_id, node_id, vmid, type, pve_node, name, created_at)
+          SELECT id, user_id, node_id, vmid, type, pve_node, name, created_at FROM servers;
+        DROP TABLE servers;
+        ALTER TABLE servers_new RENAME TO servers;
+        CREATE INDEX IF NOT EXISTS idx_servers_user ON servers(user_id);
+      `);
+    })();
+    db.pragma("foreign_keys = ON");
+  }
+} catch (migErr) {
+  console.warn("[Migration Notice] Servers table constraint check:", migErr.message);
+}
 
 const UPLOADS_DIR = path.resolve("./data/uploads");
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -163,7 +194,7 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
 
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: "draft-7", legacyHeaders: false });
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 50, standardHeaders: "draft-7", legacyHeaders: false });
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, limit: 180, standardHeaders: "draft-7", legacyHeaders: false });
 app.use("/api", apiLimiter);
 
@@ -197,7 +228,7 @@ function csrf(req, res, next) {
   next();
 }
 app.use("/api", (req, res, next) => {
-  if (req.path === "/auth/login" || req.path === "/health" || req.path === "/settings" || req.path.startsWith("/setup")) return next();
+  if (req.path === "/auth/login" || req.path === "/auth/register" || req.path === "/health" || req.path === "/settings" || req.path.startsWith("/setup")) return next();
   return requireAuth(req, res, () => csrf(req, res, next));
 });
 
@@ -356,6 +387,7 @@ const defaultSettings = {
   site_favicon: "",
   og_image: "",
   seo_description: "ALPM Proxmox VE Virtual Machine & Container Management Panel",
+  allow_registration: "0",
   site_bg_type: "none",
   site_bg_url: "",
   site_bg_opacity: "55",
@@ -372,6 +404,7 @@ function getSettings() {
     res.site_icon_url = res.site_icon || "";
     res.site_favicon_url = res.site_favicon || "";
     res.og_image_url = res.og_image || "";
+    res.allow_registration = res.allow_registration !== undefined ? String(res.allow_registration) : "0";
     res.site_bg_type = res.site_bg_type || "none";
     res.site_bg_url = res.site_bg_url || "";
     res.site_bg_opacity = res.site_bg_opacity !== undefined ? String(res.site_bg_opacity) : "55";
@@ -382,6 +415,7 @@ function getSettings() {
     def.site_icon_url = def.site_icon || "";
     def.site_favicon_url = def.site_favicon || "";
     def.og_image_url = def.og_image || "";
+    def.allow_registration = def.allow_registration !== undefined ? String(def.allow_registration) : "0";
     return def;
   }
 }
@@ -459,6 +493,56 @@ app.post("/api/auth/login", loginLimiter, async (req, res, next) => {
     });
   } catch (e) { next(e); }
 });
+
+app.post("/api/auth/register", loginLimiter, async (req, res, next) => {
+  try {
+    const s = getSettings();
+    const allowReg = s.allow_registration === "1" || s.allow_registration === true || s.allow_registration === "true";
+    if (!allowReg) {
+      return res.status(403).json({ error: "Public registration is currently disabled by administrator." });
+    }
+
+    const username = validateString(req.body.username, "Username", 32).trim();
+    const email = validateString(req.body.email, "Email", 120).trim().toLowerCase();
+    const password = validateString(req.body.password, "Password", 200);
+
+    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(username)) {
+      return res.status(400).json({ error: "Username must be 3–32 characters (letters, numbers, . _ -)." });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "Please enter a valid email address." });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters long." });
+    }
+
+    const existingUser = db.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").get(username);
+    if (existingUser) {
+      return res.status(409).json({ error: "Username is already taken. Please choose another." });
+    }
+
+    const existingEmail = db.prepare("SELECT id FROM users WHERE email=? COLLATE NOCASE").get(email);
+    if (existingEmail) {
+      return res.status(409).json({ error: "Email address is already in use by another account." });
+    }
+
+    const hash = await bcrypt.hash(password, 12);
+    const result = db.prepare("INSERT INTO users(username, email, password_hash, role, active) VALUES(?, ?, ?, 'user', 1)").run(username, email, hash);
+    const newUser = db.prepare("SELECT * FROM users WHERE id=?").get(result.lastInsertRowid);
+
+    audit(newUser.id, "user_register", `Public user self-registration: ${username} (${email})`, req);
+
+    req.session.regenerate((err) => {
+      if (err) return next(err);
+      req.session.user = { id: newUser.id };
+      req.session.csrf = crypto.randomBytes(32).toString("hex");
+      res.status(201).json({ ok: true, user: safeUser(newUser), csrfToken: req.session.csrf });
+    });
+  } catch (e) {
+    if (String(e.message).includes("UNIQUE")) e.status = 409;
+    next(e);
+  }
+});
 app.get("/api/auth/me", requireAuth, (req, res) => {
   if (!req.session.csrf) req.session.csrf = crypto.randomBytes(32).toString("hex");
   res.json({ user: safeUser(req.user), csrfToken: req.session.csrf });
@@ -469,33 +553,61 @@ app.post("/api/auth/logout", requireAuth, csrf, (req, res) => {
 });
 
 // Profile Management Endpoints
-app.get("/api/user/profile", requireAuth, (req, res) => {
-  const row = db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
-  if (!row) return res.status(404).json({ error: "User not found." });
+app.get("/api/user/profile", requireAuth, async (req, res, next) => {
+  try {
+    const row = db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);
+    if (!row) return res.status(404).json({ error: "User not found." });
 
-  const serverCount = row.role === "admin"
-    ? db.prepare("SELECT COUNT(*) AS count FROM servers").get().count
-    : db.prepare("SELECT COUNT(*) AS count FROM servers WHERE user_id=?").get(req.user.id).count;
+    const serverCount = row.role === "admin"
+      ? db.prepare("SELECT COUNT(*) AS count FROM servers").get().count
+      : db.prepare("SELECT COUNT(*) AS count FROM servers WHERE user_id=?").get(req.user.id).count;
 
-  const serverRows = row.role === "admin"
-    ? db.prepare("SELECT s.id, s.name, s.vmid, s.type, s.pve_node, n.name AS node_name FROM servers s JOIN nodes n ON n.id=s.node_id ORDER BY s.id DESC LIMIT 10").all()
-    : db.prepare("SELECT s.id, s.name, s.vmid, s.type, s.pve_node, n.name AS node_name FROM servers s JOIN nodes n ON n.id=s.node_id WHERE s.user_id=? ORDER BY s.id DESC").all(req.user.id);
+    const serverRows = row.role === "admin"
+      ? db.prepare("SELECT s.id, s.name, s.vmid, s.type, s.pve_node, s.node_id, n.name AS node_name FROM servers s JOIN nodes n ON n.id=s.node_id ORDER BY s.id DESC LIMIT 30").all()
+      : db.prepare("SELECT s.id, s.name, s.vmid, s.type, s.pve_node, s.node_id, n.name AS node_name FROM servers s JOIN nodes n ON n.id=s.node_id WHERE s.user_id=? ORDER BY s.id DESC").all(req.user.id);
 
-  const servers = serverRows.map(s => ({
-    id: s.id,
-    name: s.name,
-    vmid: s.vmid,
-    type: s.type,
-    node: s.pve_node || s.node_name || "Proxmox"
-  }));
+    // Query live cluster resources in parallel to get exact status for all assigned servers
+    const nodeIds = [...new Set(serverRows.map(s => s.node_id))];
+    const pveVmMap = new Map();
 
-  res.json({
-    user: safeUser(row),
-    stats: {
-      serverCount,
-      servers
-    }
-  });
+    await Promise.allSettled(nodeIds.map(async (nId) => {
+      try {
+        const node = getNode(nId);
+        if (node && node.enabled) {
+          const list = await pve(node, "GET", "/cluster/resources?type=vm");
+          if (Array.isArray(list)) {
+            for (const item of list) {
+              const st = item.status || "stopped";
+              pveVmMap.set(`${nId}_${item.vmid}`, st);
+              pveVmMap.set(Number(item.vmid), st);
+            }
+          }
+        }
+      } catch (_) {}
+    }));
+
+    const servers = serverRows.map(s => {
+      const liveStatus = pveVmMap.get(`${s.node_id}_${s.vmid}`) || pveVmMap.get(Number(s.vmid)) || "stopped";
+      return {
+        id: s.id,
+        name: s.name,
+        vmid: s.vmid,
+        type: s.type,
+        node: s.pve_node || s.node_name || "Proxmox",
+        status: liveStatus
+      };
+    });
+
+    res.json({
+      user: safeUser(row),
+      stats: {
+        serverCount,
+        servers
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.patch("/api/user/profile", requireAuth, async (req, res, next) => {
@@ -1437,6 +1549,71 @@ app.get("/api/servers/:id/edit/options", requireAuth, async (req, res, next) => 
       currentDiskGb = Math.round(status.maxdisk / (1024 * 1024 * 1024));
     }
 
+    // 6. Granular primary disk options
+    let diskOptions = {
+      cache: "writeback",
+      discard: true,
+      ssd: true,
+      mbps_rd: "",
+      mbps_wr: "",
+      iops_rd: "",
+      iops_wr: ""
+    };
+    const primaryDiskStr = config[diskKey] || "";
+    if (primaryDiskStr && typeof primaryDiskStr === "string") {
+      const cacheM = primaryDiskStr.match(/cache=([a-z0-9_-]+)/i);
+      if (cacheM) diskOptions.cache = cacheM[1].toLowerCase();
+      diskOptions.discard = primaryDiskStr.includes("discard=on") || !primaryDiskStr.includes("discard=");
+      diskOptions.ssd = primaryDiskStr.includes("ssd=1") || !primaryDiskStr.includes("ssd=0");
+      const mbpsRdM = primaryDiskStr.match(/mbps_rd=([0-9.]+)/i);
+      if (mbpsRdM) diskOptions.mbps_rd = mbpsRdM[1];
+      const mbpsWrM = primaryDiskStr.match(/mbps_wr=([0-9.]+)/i);
+      if (mbpsWrM) diskOptions.mbps_wr = mbpsWrM[1];
+      const iopsRdM = primaryDiskStr.match(/iops_rd=([0-9]+)/i);
+      if (iopsRdM) diskOptions.iops_rd = iopsRdM[1];
+      const iopsWrM = primaryDiskStr.match(/iops_wr=([0-9]+)/i);
+      if (iopsWrM) diskOptions.iops_wr = iopsWrM[1];
+    }
+
+    // 7. Network bandwidth rate limit from net0
+    let netRate = "";
+    if (config.net0 && typeof config.net0 === "string") {
+      const rateM = config.net0.match(/rate=([0-9.]+)/i);
+      if (rateM) netRate = rateM[1];
+    }
+
+    // 8. Startup order & delay parameters
+    let startupOrder = "";
+    let startupUp = "";
+    let startupDown = "";
+    if (config.startup && typeof config.startup === "string") {
+      const orderM = config.startup.match(/order=([0-9]+)/i);
+      if (orderM) startupOrder = orderM[1];
+      const upM = config.startup.match(/up=([0-9]+)/i);
+      if (upM) startupUp = upM[1];
+      const downM = config.startup.match(/down=([0-9]+)/i);
+      if (downM) startupDown = downM[1];
+    }
+
+    // 9. Standard Proxmox supported CPU models
+    const cpuModels = [
+      "host",
+      "kvm64",
+      "qemu64",
+      "x86-64-v2-AES",
+      "x86-64-v3",
+      "x86-64-v4",
+      "Broadwell",
+      "Haswell",
+      "Skylake-Client",
+      "Skylake-Server",
+      "Cascadelake-Server",
+      "EPYC",
+      "EPYC-Rome",
+      "EPYC-Milan",
+      "EPYC-Genoa"
+    ];
+
     res.json({
       server: row,
       config,
@@ -1444,7 +1621,13 @@ app.get("/api/servers/:id/edit/options", requireAuth, async (req, res, next) => 
       bridges,
       users,
       diskKey,
-      currentDiskGb
+      currentDiskGb,
+      diskOptions,
+      netRate,
+      startupOrder,
+      startupUp,
+      startupDown,
+      cpuModels
     });
   } catch (e) {
     next(e);
@@ -1482,6 +1665,12 @@ app.post("/api/servers/:id/edit", requireAuth, async (req, res, next) => {
 
     // 1. Update Database record if name or user changed
     if (newName !== row.name || newUserId !== row.user_id) {
+      if (newUserId !== row.user_id) {
+        const existingForUser = db.prepare("SELECT id FROM servers WHERE node_id=? AND vmid=? AND user_id=?").get(row.node_id, row.vmid, newUserId);
+        if (existingForUser) {
+          return res.status(409).json({ error: "The target user is already assigned to this VPS." });
+        }
+      }
       db.prepare("UPDATE servers SET name=?, user_id=? WHERE id=?").run(newName, newUserId, id);
     }
 
@@ -1497,16 +1686,36 @@ app.post("/api/servers/:id/edit", requireAuth, async (req, res, next) => {
 
     const isAdmin = req.user.role === "admin";
 
-    // CPU & Memory (admin only)
+    // CPU, Sockets, Type, Limits & Memory (Admin only)
     if (isAdmin) {
       if (req.body.cores) {
         configUpdate.cores = Math.max(1, Math.min(128, Number(req.body.cores)));
       }
-      if (row.type === "qemu" && req.body.sockets) {
-        configUpdate.sockets = Math.max(1, Math.min(8, Number(req.body.sockets)));
+      if (row.type === "qemu") {
+        if (req.body.sockets) {
+          configUpdate.sockets = Math.max(1, Math.min(8, Number(req.body.sockets)));
+        }
+        if (req.body.cpu) {
+          configUpdate.cpu = String(req.body.cpu).trim();
+        }
+        if (req.body.numa != null) {
+          configUpdate.numa = (req.body.numa === true || req.body.numa === "true" || req.body.numa === 1 || req.body.numa === "on") ? 1 : 0;
+        }
+      }
+      if (req.body.cpulimit != null && req.body.cpulimit !== "") {
+        const lim = Number(req.body.cpulimit);
+        if (lim > 0) configUpdate.cpulimit = lim;
+        else configUpdate.delete = (configUpdate.delete ? configUpdate.delete + "," : "") + "cpulimit";
+      }
+      if (req.body.cpuunits != null && req.body.cpuunits !== "") {
+        const units = Number(req.body.cpuunits);
+        if (units > 0) configUpdate.cpuunits = units;
       }
       if (req.body.memory) {
         configUpdate.memory = Math.max(256, Math.min(524288, Number(req.body.memory)));
+      }
+      if (row.type === "qemu" && req.body.balloon != null && req.body.balloon !== "") {
+        configUpdate.balloon = Math.max(0, Math.min(524288, Number(req.body.balloon)));
       }
       if (row.type === "lxc" && req.body.swap != null) {
         configUpdate.swap = Math.max(0, Math.min(65536, Number(req.body.swap)));
@@ -1519,6 +1728,7 @@ app.post("/api/servers/:id/edit", requireAuth, async (req, res, next) => {
       const vlan = req.body.vlan ? Number(req.body.vlan) : null;
       const mac = req.body.mac ? req.body.mac.trim() : null;
       const firewall = req.body.firewall != null ? (req.body.firewall === true || req.body.firewall === "true" || req.body.firewall === 1 || req.body.firewall === "on") : null;
+      const netRate = req.body.netRate ? Number(req.body.netRate) : null;
       const net = buildIpConfig(req.body.ip4Type, req.body.ip4Address, req.body.ip4Gateway, req.body.ip6Type, req.body.ip6Address, req.body.ip6Gateway);
 
       if (row.type === "lxc") {
@@ -1526,6 +1736,7 @@ app.post("/api/servers/:id/edit", requireAuth, async (req, res, next) => {
         if (vlan) net0Str += `,tag=${vlan}`;
         if (mac) net0Str += `,hwaddr=${mac}`;
         if (firewall) net0Str += `,firewall=1`;
+        if (netRate && netRate > 0) net0Str += `,rate=${netRate}`;
         if (net.ip4Type === "static" && net.ip4) {
           net0Str += `,ip=${net.ip4}`;
           if (net.gw4) net0Str += `,gw=${net.gw4}`;
@@ -1547,6 +1758,7 @@ app.post("/api/servers/:id/edit", requireAuth, async (req, res, next) => {
         if (vlan) net0Str += `,tag=${vlan}`;
         if (mac) net0Str += `,macaddr=${mac}`;
         if (firewall) net0Str += `,firewall=1`;
+        if (netRate && netRate > 0) net0Str += `,rate=${netRate}`;
         configUpdate.net0 = net0Str;
 
         let ipconfig0Str = "";
@@ -1565,6 +1777,53 @@ app.post("/api/servers/:id/edit", requireAuth, async (req, res, next) => {
           ipconfig0Str += ",ip6=auto";
         }
         configUpdate.ipconfig0 = ipconfig0Str;
+      }
+    }
+
+    // Primary Disk Options & Policies (Admin only, QEMU)
+    if (isAdmin && row.type === "qemu") {
+      let targetDiskKey = req.body.diskKey || "scsi0";
+      try {
+        const liveCfg = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/qemu/${row.vmid}/config`);
+        if (!liveCfg[targetDiskKey]) {
+          for (let i = 0; i < 16; i++) {
+            const kCandidates = [`scsi${i}`, `virtio${i}`, `sata${i}`, `ide${i}`];
+            for (const cand of kCandidates) {
+              const val = liveCfg[cand] || "";
+              if (val && typeof val === "string" && !val.includes("media=cdrom") && !val.includes("cloudinit") && !val.includes("none")) {
+                targetDiskKey = cand;
+                break;
+              }
+            }
+            if (liveCfg[targetDiskKey]) break;
+          }
+        }
+        const existingDiskStr = liveCfg[targetDiskKey] || "";
+        if (existingDiskStr && typeof existingDiskStr === "string") {
+          const parts = existingDiskStr.split(",");
+          const volPart = parts[0];
+          const sizePart = parts.find(p => p.startsWith("size=")) || "";
+          let updatedParts = [volPart];
+          if (sizePart) updatedParts.push(sizePart);
+
+          const cacheMode = req.body.diskCache || "writeback";
+          if (cacheMode) updatedParts.push(`cache=${cacheMode}`);
+
+          if (req.body.discard === true || req.body.discard === "true" || req.body.discard === "on" || req.body.discard === 1) {
+            updatedParts.push("discard=on");
+          }
+          if (req.body.ssd === true || req.body.ssd === "true" || req.body.ssd === "on" || req.body.ssd === 1) {
+            updatedParts.push("ssd=1");
+          }
+          if (req.body.mbps_rd && Number(req.body.mbps_rd) > 0) updatedParts.push(`mbps_rd=${Number(req.body.mbps_rd)}`);
+          if (req.body.mbps_wr && Number(req.body.mbps_wr) > 0) updatedParts.push(`mbps_wr=${Number(req.body.mbps_wr)}`);
+          if (req.body.iops_rd && Number(req.body.iops_rd) > 0) updatedParts.push(`iops_rd=${Number(req.body.iops_rd)}`);
+          if (req.body.iops_wr && Number(req.body.iops_wr) > 0) updatedParts.push(`iops_wr=${Number(req.body.iops_wr)}`);
+
+          configUpdate[targetDiskKey] = updatedParts.join(",");
+        }
+      } catch (err) {
+        console.warn("Could not pre-configure disk parameters:", err.message);
       }
     }
 
@@ -1592,25 +1851,52 @@ app.post("/api/servers/:id/edit", requireAuth, async (req, res, next) => {
       configUpdate.ciuser = req.body.ciUser.trim();
     }
 
-    // Features / Options (Restricted to Administrator only)
-    if (isAdmin && row.type === "lxc" && req.body.nesting != null) {
-      const nestingOn = req.body.nesting === true || req.body.nesting === "true" || req.body.nesting === "on";
-      configUpdate.features = nestingOn ? "nesting=1" : "";
+    // Hypervisor Flags & Features (Restricted to Administrator only)
+    if (isAdmin && row.type === "lxc") {
+      const feats = [];
+      if (req.body.nesting === true || req.body.nesting === "true" || req.body.nesting === "on" || req.body.nesting === 1) feats.push("nesting=1");
+      if (req.body.keyctl === true || req.body.keyctl === "true" || req.body.keyctl === "on" || req.body.keyctl === 1) feats.push("keyctl=1");
+      if (req.body.fuse === true || req.body.fuse === "true" || req.body.fuse === "on" || req.body.fuse === 1) feats.push("fuse=1");
+      if (req.body.mknod === true || req.body.mknod === "true" || req.body.mknod === "on" || req.body.mknod === 1) feats.push("mknod=1");
+      configUpdate.features = feats.join(",");
     }
-    if (isAdmin && row.type === "qemu" && req.body.qemuAgent != null) {
-      const agentOn = req.body.qemuAgent === true || req.body.qemuAgent === "true" || req.body.qemuAgent === "on";
-      configUpdate.agent = agentOn ? 1 : 0;
+    if (isAdmin && row.type === "qemu") {
+      if (req.body.qemuAgent != null) {
+        const agentOn = req.body.qemuAgent === true || req.body.qemuAgent === "true" || req.body.qemuAgent === "on" || req.body.qemuAgent === 1;
+        configUpdate.agent = agentOn ? 1 : 0;
+      }
+      if (req.body.vga) {
+        configUpdate.vga = String(req.body.vga).trim();
+      }
+      if (req.body.bios) {
+        configUpdate.bios = String(req.body.bios).trim();
+      }
+      if (req.body.machine) {
+        configUpdate.machine = String(req.body.machine).trim();
+      }
     }
 
     // Boot & Autostart options (Restricted to Administrator only)
-    if (isAdmin && req.body.onboot != null) {
-      configUpdate.onboot = (req.body.onboot === true || req.body.onboot === "true" || req.body.onboot === 1 || req.body.onboot === "1" || req.body.onboot === "on") ? 1 : 0;
-    }
-    if (isAdmin && req.body.startup != null && String(req.body.startup).trim()) {
-      configUpdate.startup = String(req.body.startup).trim();
-    }
-    if (isAdmin && row.type === "qemu" && req.body.boot != null && String(req.body.boot).trim()) {
-      configUpdate.boot = String(req.body.boot).trim();
+    if (isAdmin) {
+      if (req.body.onboot != null) {
+        configUpdate.onboot = (req.body.onboot === true || req.body.onboot === "true" || req.body.onboot === 1 || req.body.onboot === "1" || req.body.onboot === "on") ? 1 : 0;
+      }
+      if (req.body.startupOrder != null || req.body.startupUp != null || req.body.startupDown != null) {
+        const sParts = [];
+        if (req.body.startupOrder !== "" && req.body.startupOrder != null && Number(req.body.startupOrder) >= 0) sParts.push(`order=${Number(req.body.startupOrder)}`);
+        if (req.body.startupUp !== "" && req.body.startupUp != null && Number(req.body.startupUp) >= 0) sParts.push(`up=${Number(req.body.startupUp)}`);
+        if (req.body.startupDown !== "" && req.body.startupDown != null && Number(req.body.startupDown) >= 0) sParts.push(`down=${Number(req.body.startupDown)}`);
+        if (sParts.length > 0) {
+          configUpdate.startup = sParts.join(",");
+        } else if (req.body.startup != null) {
+          configUpdate.startup = String(req.body.startup).trim();
+        }
+      } else if (req.body.startup != null) {
+        configUpdate.startup = String(req.body.startup).trim();
+      }
+      if (row.type === "qemu" && req.body.boot != null && String(req.body.boot).trim()) {
+        configUpdate.boot = String(req.body.boot).trim();
+      }
     }
 
     // Apply config update to Proxmox (LXC requires PUT, QEMU accepts POST or PUT)
@@ -1727,7 +2013,12 @@ app.patch("/api/admin/settings", requireAuth, requireAdmin, (req, res) => {
     setSetting("site_bg_blur", String(num));
   }
 
-  audit(req.user.id, "settings_update", "Updated site branding, background & SEO settings", req);
+  if (req.body.allow_registration !== undefined) {
+    const allow = req.body.allow_registration === true || req.body.allow_registration === "1" || req.body.allow_registration === 1 || req.body.allow_registration === "true";
+    setSetting("allow_registration", allow ? "1" : "0");
+  }
+
+  audit(req.user.id, "settings_update", "Updated site branding, background, registration & SEO settings", req);
   const updated = getSettings();
   if (io) io.emit("settings:updated", { settings: updated });
   res.json({ ok: true, settings: updated, message: "Settings saved successfully." });
@@ -1802,28 +2093,81 @@ app.post("/api/admin/users", requireAuth, requireAdmin, async (req, res, next) =
     res.status(201).json({ user: safeUser(db.prepare("SELECT * FROM users WHERE id=?").get(result.lastInsertRowid)) });
   } catch (e) { if (String(e.message).includes("UNIQUE")) e.status = 409; next(e); }
 });
-app.patch("/api/admin/users/:id", requireAuth, requireAdmin, (req, res, next) => {
+app.patch("/api/admin/users/:id", requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const id = Number(req.params.id);
-    if (id === req.user.id && req.body.active === false) return res.status(400).json({ error: "You cannot disable your own account." });
-    if (id === req.user.id && req.body.role && req.body.role !== "admin") return res.status(400).json({ error: "You cannot revoke your own administrator role." });
-
     const target = db.prepare("SELECT * FROM users WHERE id=?").get(id);
     if (!target) return res.status(404).json({ error: "User not found." });
-    if (req.body.role && !["admin","user"].includes(req.body.role)) return res.status(400).json({ error: "Invalid role." });
 
-    if (target.role === "admin" && (req.body.active === false || req.body.role === "user")) {
+    const newActive = typeof req.body.active === "boolean" ? (req.body.active ? 1 : 0) : (req.body.active !== undefined ? (Number(req.body.active) ? 1 : 0) : target.active);
+    const newRole = req.body.role ? (req.body.role === "admin" ? "admin" : "user") : target.role;
+
+    if (id === req.user.id && newActive === 0) {
+      return res.status(400).json({ error: "You cannot disable your own administrator account." });
+    }
+    if (id === req.user.id && newRole !== "admin") {
+      return res.status(400).json({ error: "You cannot revoke your own administrator role." });
+    }
+
+    if (target.role === "admin" && (newActive === 0 || newRole === "user")) {
       const activeAdminCount = db.prepare("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND active=1 AND id!=?").get(id).c;
       if (activeAdminCount < 1) {
         return res.status(400).json({ error: "Cannot modify this user: platform must have at least one active administrator." });
       }
     }
 
-    db.prepare("UPDATE users SET active=COALESCE(?,active), role=COALESCE(?,role) WHERE id=?")
-      .run(typeof req.body.active === "boolean" ? (req.body.active ? 1 : 0) : null, req.body.role || null, id);
-    audit(req.user.id, "user_update", `User ${id}`, req);
-    res.json({ ok: true });
-  } catch (e) { next(e); }
+    let newUsername = target.username;
+    if (req.body.username && typeof req.body.username === "string" && req.body.username.trim() && req.body.username.trim() !== target.username) {
+      const u = validateString(req.body.username.trim(), "Username", 32);
+      if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(u)) {
+        return res.status(400).json({ error: "Username must be 3–32 characters (letters, numbers, . _ -)." });
+      }
+      const existing = db.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE AND id!=?").get(u, id);
+      if (existing) {
+        return res.status(409).json({ error: "Username is already taken by another account." });
+      }
+      newUsername = u;
+    }
+
+    let newEmail = target.email;
+    if (req.body.email && typeof req.body.email === "string" && req.body.email.trim() && req.body.email.trim().toLowerCase() !== target.email.toLowerCase()) {
+      const e = validateString(req.body.email.trim().toLowerCase(), "Email", 120);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
+        return res.status(400).json({ error: "Please enter a valid email address." });
+      }
+      const existing = db.prepare("SELECT id FROM users WHERE email=? COLLATE NOCASE AND id!=?").get(e, id);
+      if (existing) {
+        return res.status(409).json({ error: "Email address is already in use by another account." });
+      }
+      newEmail = e;
+    }
+
+    let newHash = target.password_hash;
+    if (req.body.password && typeof req.body.password === "string" && req.body.password.trim()) {
+      const p = req.body.password.trim();
+      if (p.length < 8) {
+        return res.status(400).json({ error: "New password must be at least 8 characters long." });
+      }
+      newHash = await bcrypt.hash(p, 12);
+    }
+
+    db.prepare(`
+      UPDATE users SET
+        username = ?,
+        email = ?,
+        password_hash = ?,
+        role = ?,
+        active = ?
+      WHERE id = ?
+    `).run(newUsername, newEmail, newHash, newRole, newActive, id);
+
+    audit(req.user.id, "user_edit", `Edited user #${id} (${newUsername}, role: ${newRole}, active: ${newActive})`, req);
+    const updated = db.prepare("SELECT * FROM users WHERE id=?").get(id);
+    res.json({ ok: true, user: safeUser(updated) });
+  } catch (e) {
+    if (String(e.message).includes("UNIQUE")) e.status = 409;
+    next(e);
+  }
 });
 app.delete("/api/admin/users/:id", requireAuth, requireAdmin, (req, res, next) => {
   try {
@@ -2883,12 +3227,23 @@ app.post("/api/admin/servers/assign", requireAuth, requireAdmin, async (req, res
     }
 
     const pveNode = resource.node;
+    // Check if this exact VPS is already assigned to this specific user
+    const alreadyAssigned = db.prepare("SELECT id FROM servers WHERE node_id=? AND vmid=? AND user_id=?").get(nodeId, vmid, userId);
+    if (alreadyAssigned) {
+      return res.status(409).json({ error: `This VPS (VMID ${vmid}) is already assigned to this user.` });
+    }
+
     const result = db.prepare("INSERT INTO servers(user_id,node_id,vmid,type,pve_node,name) VALUES(?,?,?,?,?,?)").run(userId,nodeId,vmid,type,pveNode,name);
     audit(req.user.id, "server_assign", `${type}:${vmid} (node: ${pveNode}) to user ${userId}`, req);
     io.emit("vps:list_changed");
     setTimeout(pollLiveMetrics, 300);
     res.status(201).json({ ok: true, id: result.lastInsertRowid, pve_node: pveNode, type });
-  } catch (e) { if (String(e.message).includes("UNIQUE")) e.status = 409; next(e); }
+  } catch (e) {
+    if (String(e.message).includes("UNIQUE")) {
+      return res.status(409).json({ error: `This VPS is already assigned to this user.` });
+    }
+    next(e);
+  }
 });
 app.delete("/api/admin/servers/:id/assignment", requireAuth, requireAdmin, (req, res, next) => {
   try {
@@ -2965,6 +3320,9 @@ app.get("*", (req, res) => {
       .replace(/<div class="brand"><span class="brand-mark">[\s\S]*?<\/div>/i, `<div class="brand">${brandHtml}</div>`);
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.send(html);
   } catch (err) {
     res.sendFile(path.join(__dirname, "index.html"));
@@ -3375,6 +3733,7 @@ function setupConsoleWebSocket() {
 
       let handshaken = false;
       let keepAliveTimer = null;
+      const earlyQueue = [];
 
       pveWs.on("open", () => {
         // Handshake: user:ticket\n
@@ -3382,7 +3741,7 @@ function setupConsoleWebSocket() {
 
         // Send keepalive ping to Proxmox every 3 seconds to keep TTY connection alive
         keepAliveTimer = setInterval(() => {
-          if (pveWs.readyState === WebSocket.OPEN) {
+          if (pveWs.readyState === WebSocket.OPEN && handshaken) {
             try { pveWs.send("2"); } catch {}
           }
         }, 3000);
@@ -3395,6 +3754,13 @@ function setupConsoleWebSocket() {
             handshaken = true;
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({ type: "status", status: "connected" }));
+            }
+            // Flush buffered early messages (such as early fit/resize or early keystrokes)
+            while (earlyQueue.length > 0) {
+              const item = earlyQueue.shift();
+              try {
+                if (pveWs.readyState === WebSocket.OPEN) pveWs.send(item);
+              } catch (_) {}
             }
             return;
           }
@@ -3422,18 +3788,30 @@ function setupConsoleWebSocket() {
       clientWs.on("message", (raw) => {
         try {
           const msg = JSON.parse(raw.toString("utf8"));
-          if (!pveWs || pveWs.readyState !== WebSocket.OPEN) return;
+          if (!pveWs) return;
 
+          let payload = null;
           if (msg.type === "input" && typeof msg.data === "string") {
-            pveWs.send(`0:${Buffer.byteLength(msg.data, "utf8")}:${msg.data}`);
+            payload = `0:${Buffer.byteLength(msg.data, "utf8")}:${msg.data}`;
           } else if (msg.type === "resize") {
             const cols = Math.max(10, Math.min(500, Number(msg.cols) || 80));
             const rows = Math.max(5, Math.min(200, Number(msg.rows) || 24));
-            pveWs.send(`1:${cols}:${rows}:`);
+            payload = `1:${cols}:${rows}:`;
           } else if (msg.type === "ping") {
-            pveWs.send("2");
+            if (handshaken && pveWs.readyState === WebSocket.OPEN) {
+              pveWs.send("2");
+            }
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({ type: "pong" }));
+            }
+            return;
+          }
+
+          if (payload) {
+            if (!handshaken || pveWs.readyState !== WebSocket.OPEN) {
+              earlyQueue.push(payload);
+            } else {
+              pveWs.send(payload);
             }
           }
         } catch (err) {
