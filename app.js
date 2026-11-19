@@ -193,11 +193,6 @@ try {
   if (!String(e.message).includes("duplicate column name")) console.warn("[API Key Schema Notice]:", e.message);
 }
 
-// Ensure plaintext tokens are wiped from api_keys table for security
-try {
-  db.prepare("UPDATE api_keys SET key_token = '' WHERE key_token IS NOT NULL AND key_token != ''").run();
-} catch (e) {}
-
 // Dynamic column additions for vm_templates if upgrading from earlier schema
 const templateExtraCols = [
   "ALTER TABLE vm_templates ADD COLUMN scsihw TEXT DEFAULT 'virtio-scsi-single'",
@@ -6602,13 +6597,24 @@ app.post("/api/admin/templates/:id/deploy", requireAuth, requireAdmin, async (re
 
 app.get("/api/admin/api-keys", requireAuth, requireAdmin, (req, res) => {
   const keys = db.prepare(`
-    SELECT k.id, k.name, k.key_prefix, k.scopes, k.allowed_ips, k.rate_limit,
+    SELECT k.id, k.name, k.key_prefix, k.key_token, k.scopes, k.allowed_ips, k.rate_limit,
            k.expires_at, k.active, k.request_count, k.last_used_at, k.last_used_ip,
            k.created_at, k.created_by_ip, u.id AS user_id, u.username AS user_name
     FROM api_keys k
     JOIN users u ON k.user_id = u.id
     ORDER BY k.id DESC
   `).all();
+
+  for (const k of keys) {
+    if (k.key_token) {
+      try {
+        const dec = decrypt(k.key_token);
+        if (dec) k.key_token = dec;
+      } catch (e) {
+        // preserve existing if not encrypted format
+      }
+    }
+  }
 
   const total = keys.length;
   const active = keys.filter(k => k.active === 1).length;
@@ -6652,14 +6658,15 @@ app.post("/api/admin/api-keys", requireAuth, requireAdmin, (req, res) => {
   const rawSecret = "atyro_live_" + crypto.randomBytes(32).toString("hex");
   const keyPrefix = rawSecret.slice(0, 15) + "..." + rawSecret.slice(-4);
   const keyHash = crypto.createHash("sha256").update(rawSecret).digest("hex");
+  const encSecret = encrypt(rawSecret);
   const clientIp = (req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || req.socket.remoteAddress || "").trim();
 
   const result = db.prepare(`
     INSERT INTO api_keys (
       user_id, name, key_prefix, key_hash, key_token, scopes, allowed_ips,
       rate_limit, expires_at, active, created_by_ip
-    ) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, 1, ?)
-  `).run(req.user.id, name, keyPrefix, keyHash, scopes, allowedIps, rateLimitVal, expiresAt, clientIp);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+  `).run(req.user.id, name, keyPrefix, keyHash, encSecret, scopes, allowedIps, rateLimitVal, expiresAt, clientIp);
 
   audit(req.user.id, "api_key.create", `Created API key "${name}" (${keyPrefix}) with scopes: ${scopes}`, req);
 
@@ -6745,12 +6752,13 @@ app.post("/api/admin/api-keys/:id/regenerate", requireAuth, requireAdmin, (req, 
   const rawSecret = "atyro_live_" + crypto.randomBytes(32).toString("hex");
   const keyPrefix = rawSecret.slice(0, 15) + "..." + rawSecret.slice(-4);
   const keyHash = crypto.createHash("sha256").update(rawSecret).digest("hex");
+  const encSecret = encrypt(rawSecret);
 
   db.prepare(`
     UPDATE api_keys SET
-      key_prefix = ?, key_hash = ?, key_token = '', active = 1
+      key_prefix = ?, key_hash = ?, key_token = ?, active = 1
     WHERE id = ?
-  `).run(keyPrefix, keyHash, id);
+  `).run(keyPrefix, keyHash, encSecret, id);
 
   apiKeyRateLimits.delete(id);
   audit(req.user.id, "api_key.regenerate", `Regenerated secret token for API key #${id} ("${key.name}")`, req);

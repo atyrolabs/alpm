@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0a">
 <title>ALPM — VPS Control Panel</title>
 <meta name="description" content="Next-Generation Proxmox VE VPS Cloud Management Platform" id="metaDescription">
@@ -94,7 +94,20 @@ a { color: inherit; text-decoration: none; }
 .small { font-size: 12px; }
 
 /* Shell Layout */
-.app { min-height: 100vh; display: flex; }
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+  max-width: 100vw;
+  -webkit-text-size-adjust: 100%;
+}
+.app {
+  min-height: 100vh;
+  display: flex;
+  overflow-x: hidden;
+  max-width: 100vw;
+  width: 100%;
+  min-width: 0;
+}
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -151,6 +164,8 @@ a { color: inherit; text-decoration: none; }
   object-fit: contain;
   border: none !important;
   background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
   flex-shrink: 0;
   display: block;
 }
@@ -394,6 +409,9 @@ a { color: inherit; text-decoration: none; }
   margin-left: 260px;
   min-height: 100vh;
   width: calc(100% - 260px);
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -733,10 +751,31 @@ a { color: inherit; text-decoration: none; }
 
 /* Tables */
 .table-wrap {
-  overflow-x: auto;
+  overflow-x: auto !important;
   border-radius: var(--radius-sm);
-  max-width: 100%;
+  max-width: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-x: contain;
+  position: relative;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.35) rgba(255, 255, 255, 0.02);
+}
+.table-wrap::-webkit-scrollbar {
+  height: 5px;
+}
+.table-wrap::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+}
+.table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.35);
+  border-radius: 4px;
+}
+.table-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
 }
 table {
   border-collapse: collapse;
@@ -2089,48 +2128,347 @@ textarea.xterm-helper-textarea,
   font: 600 14px var(--font-heading);
 }
 
-/* Media Queries */
-@media(max-width:1100px){
-  .metric-grid{grid-template-columns:repeat(2,1fr)}
-  .spec-cards{grid-template-columns:1fr}
-  .chart-grid{grid-template-columns:1fr}
+/* ==========================================================================
+   COMPREHENSIVE MULTI-DEVICE & MOBILE RESPONSIVENESS SYSTEM (UI/UX)
+   ========================================================================== */
+
+/* 1. Large Tablets & Small Desktops (<= 1100px) */
+@media (max-width: 1100px) {
+  .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .spec-cards { grid-template-columns: 1fr; }
+  .chart-grid { grid-template-columns: 1fr; }
 }
-@media(max-width:1000px){
-  .stats{grid-template-columns:repeat(2,1fr)}
-  .two-col{grid-template-columns:1fr}
-  .server-grid{grid-template-columns:1fr}
+
+/* 2. Standard Tablets & Netbooks (<= 1000px) */
+@media (max-width: 1000px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .two-col { grid-template-columns: 1fr; }
+  .server-grid { grid-template-columns: 1fr; }
 }
-@media(max-width:768px){
-  .sidebar{
-    transform:translateX(-100%);
-    width:280px;
+
+/* 3. Small Tablets & Mobile Devices (<= 768px) */
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(-100%);
+    width: 280px;
+    box-shadow: 10px 0 40px rgba(0, 0, 0, 0.85);
   }
-  .sidebar.open{
-    transform:translateX(0);
+  .sidebar.open {
+    transform: translateX(0);
   }
-  .main{
-    margin-left:0;
-    width:100%;
+  .sidebar-close-btn {
+    display: inline-flex !important;
   }
-  .topbar{padding:0 20px}
-  .content{padding:24px 16px}
-  .mobile-menu{display:inline-flex}
-  .topbar .crumb{
-    margin-right:auto;
-    margin-left:12px;
-    font-size:15px;
-    max-width:calc(100vw - 220px);
-    overflow:hidden;
-    text-overflow:ellipsis;
-    white-space:nowrap;
+  .main {
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100vw;
   }
-  .stats{gap:12px}
-  .stat{padding:18px}
-  .stat-value{font-size:26px}
-  .page-head{flex-direction:column}
-  .form-grid{grid-template-columns:1fr}
-  .form-grid-3, .form-grid-4{grid-template-columns:1fr}
-  .metric-grid{grid-template-columns:1fr}
+  .topbar {
+    padding: 0 16px;
+    height: 64px;
+  }
+  .topbar .crumb {
+    margin-right: auto;
+    margin-left: 10px;
+    font-size: 14px;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .top-right {
+    gap: 10px;
+  }
+  .mobile-menu {
+    display: inline-flex !important;
+    width: 38px;
+    height: 38px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .content {
+    padding: 20px 14px 48px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .page-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .page-head h1 {
+    font-size: 24px;
+    letter-spacing: -0.02em;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    max-width: 100%;
+    margin: 0 0 4px;
+  }
+  .page-head p {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .page-head > div:last-child {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .stats {
+    gap: 12px;
+  }
+  .stat {
+    padding: 16px;
+  }
+  .stat-value {
+    font-size: 24px;
+  }
+  .form-grid,
+  .form-grid-3,
+  .form-grid-4 {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+  .metric-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  /* Forms iOS Safari zoom prevention */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Tab Bar smooth momentum scroll */
+  .tab-nav {
+    gap: 4px;
+    padding-bottom: 4px;
+    margin-bottom: 18px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(99, 102, 241, 0.35) transparent;
+  }
+  .tab-nav::-webkit-scrollbar {
+    height: 3px;
+  }
+  .tab-nav::-webkit-scrollbar-thumb {
+    background: rgba(99, 102, 241, 0.4);
+    border-radius: 3px;
+  }
+  .tab-btn {
+    padding: 10px 14px;
+    font-size: 12.5px;
+    flex-shrink: 0;
+  }
+
+  /* Responsive Modals */
+  .modal-backdrop {
+    padding: 12px 8px;
+  }
+  .modal {
+    width: 100% !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: 92vh !important;
+    padding: 20px 16px !important;
+    border-radius: 14px !important;
+    box-sizing: border-box !important;
+  }
+  .modal.modal-large,
+  .modal.modal-deploy {
+    width: 100% !important;
+    max-width: calc(100vw - 16px) !important;
+    padding: 20px 16px !important;
+  }
+  .modal.modal-terminal {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+    border: none !important;
+    position: fixed;
+    inset: 0;
+  }
+  .modal-head {
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .modal-head h3 {
+    font-size: 18px !important;
+  }
+
+  /* VPS Management Header on Mobile */
+  .vps-head {
+    margin-bottom: 20px;
+    gap: 14px;
+  }
+  .vps-title h1 {
+    font-size: 24px;
+  }
+  .vps-head .actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .vps-head .actions .btn {
+    flex: 1 1 calc(50% - 8px);
+    justify-content: center;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
+
+/* 4. Standard Mobile Phones (<= 640px) */
+@media (max-width: 640px) {
+  .topbar {
+    padding: 0 12px;
+    height: 58px;
+  }
+  .pill#infraPill .pill-text {
+    display: none !important;
+  }
+  .pill#infraPill {
+    padding: 4px 8px !important;
+  }
+  .server-card {
+    padding: 16px;
+  }
+  .server-name {
+    font-size: 15px;
+  }
+  .server-meta {
+    margin: 12px 0;
+    gap: 6px;
+  }
+  .server-card .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+  }
+  .server-card .actions .btn {
+    padding: 7px 11px;
+    font-size: 11.5px;
+  }
+  .scope-mode-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .image-preview-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .profile-hero {
+    padding: 18px 16px;
+    gap: 14px;
+  }
+  .settings-card {
+    padding: 18px 14px;
+  }
+  .settings-card-header {
+    gap: 10px;
+  }
+  .node-alerts-wrapper {
+    padding: 10px 14px 0 14px;
+  }
+  .node-alert-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .node-alert-card > div:last-child {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+  }
+  .node-alert-card > div:last-child .btn {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+/* 5. Compact Mobile Phones (<= 480px) */
+@media (max-width: 480px) {
+  .topbar .crumb {
+    max-width: 90px;
+    font-size: 13px;
+  }
+  .pill#infraPill {
+    display: none !important;
+  }
+  .top-right {
+    gap: 8px;
+  }
+  .live-status-pill {
+    padding: 3px 8px;
+    font-size: 10px;
+  }
+  .live-dot {
+    width: 6px;
+    height: 6px;
+  }
+  .stats {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 8px;
+  }
+  .stat {
+    padding: 12px;
+  }
+  .stat-value {
+    font-size: 20px;
+    margin-top: 6px;
+  }
+  .stat-top {
+    font-size: 11px;
+  }
+  .stat-icon {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+  .vps-head .actions .btn {
+    flex: 1 1 100%;
+  }
+  .login-card {
+    padding: 28px 20px;
+  }
+  .login-card h1 {
+    font-size: 22px;
+  }
+  .page-head h1 {
+    font-size: 20px;
+  }
+  .btn {
+    padding: 8px 12px;
+  }
+  .btn.small {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+}
+
+/* 6. Ultra-Compact Phones (<= 360px) */
+@media (max-width: 360px) {
+  .stats {
+    grid-template-columns: 1fr !important;
+  }
+  .topbar .crumb {
+    display: none;
+  }
+  .content {
+    padding: 16px 10px 40px;
+  }
 }
 
 /* Live Status Indicator Pill */
@@ -2839,7 +3177,7 @@ function ico(name, cls = "", style = "") {
     eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
     lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
-    key: '<path d="M21 2l-2 2m-1.5 1.5L14 9l-2-2-4 4 2 2-3 3 2 2-3 3-3-3v-4l6-6"/><circle cx="17.5" cy="6.5" r="2.5"/>',
+    key: '<circle cx="7.5" cy="12" r="4.5"/><path d="M12 12h9M16.5 12v3.5M19.5 12v2.5"/>',
     spinner: '<circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3a9 9 0 0 1 9 9"/>',
     rocket: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4.5c1.62-1.63 5-2.5 5-2.5"/><path d="M12 15v5s3.03-.55 4.5-2c1.63-1.62 2.5-5 2.5-5"/>',
     trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
@@ -3243,8 +3581,9 @@ function renderUserAvatar(user, customClass = "avatar", style = "") {
   const u = user || state.user || {};
   const initial = (u.username?.[0] || "U").toUpperCase();
   const st = style ? ` style="${style}"` : "";
-  if (u.avatar_url) {
-    return `<img class="${customClass} user-avatar-img" src="${esc(u.avatar_url)}" alt="${esc(u.username || 'User')}"${st} onerror="this.outerHTML='<span class=\\'${customClass}\\'${st}>${esc(initial)}</span>'">`;
+  const avatarUrl = u.avatar_url || u.discord_avatar || "";
+  if (avatarUrl) {
+    return `<img class="${customClass} user-avatar-img" src="${esc(avatarUrl)}" alt="${esc(u.username || 'User')}"${st} referrerpolicy="no-referrer" onerror="this.outerHTML='<span class=\\'${customClass}\\'${st}>${esc(initial)}</span>'">`;
   }
   return `<span class="${customClass}"${st}>${esc(initial)}</span>`;
 }
@@ -3260,7 +3599,7 @@ function renderDiscordAvatar(user, size = 44) {
   const avatarUrl = u.discord_avatar || "";
   if (avatarUrl) {
     return `<div class="discord-avatar-box" style="width:${size}px;height:${size}px;border-radius:50%;background:#5865F2;overflow:hidden;flex-shrink:0;position:relative;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:2px solid rgba(88,101,242,0.4)">
-      <img src="${esc(avatarUrl)}" alt="Discord Avatar" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block" onerror="handleDiscordAvatarError(this)">
+      <img src="${esc(avatarUrl)}" alt="Discord Avatar" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block" onerror="handleDiscordAvatarError(this)" referrerpolicy="no-referrer">
     </div>`;
   }
   return `<div class="discord-avatar-box" style="width:${size}px;height:${size}px;border-radius:50%;background:#5865F2;overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.3)">
@@ -4132,19 +4471,30 @@ function renderSetup() {
 
 function shell() {
   const admin = state.user.role === "admin";
-  $("#root").innerHTML = `<div class="app"><div class="sidebar-backdrop" id="sidebarBackdrop"></div><aside class="sidebar" id="sidebar">${renderBrandLogo()}<div class="nav-label">WORKSPACE</div><nav class="nav"><button data-page="overview" class="active"><span class="ico">${ico("overview")}</span>Overview</button><button data-page="servers"><span class="ico">${ico("servers")}</span>Virtual servers</button><button data-page="profile"><span class="ico">${ico("user")}</span>My Profile</button></nav>${admin ? `<div class="nav-label">ADMINISTRATION</div><nav class="nav"><button data-page="templates"><span class="ico">${ico("layers")}</span>VM Templates</button><button data-page="create-vps"><span class="ico">${ico("zap")}</span>Create VPS</button><button data-page="assign"><span class="ico">${ico("plus")}</span>Assign VPS</button><button data-page="nodes"><span class="ico">${ico("nodes")}</span>Proxmox nodes</button><button data-page="tasks"><span class="ico">${ico("clock")}</span>Cluster tasks</button><button data-page="users"><span class="ico">${ico("users")}</span>Users</button><button data-page="api-keys"><span class="ico">${ico("key")}</span>API Keys</button><button data-page="logs"><span class="ico">${ico("logs")}</span>Audit logs</button><button data-page="settings"><span class="ico">${ico("gear")}</span>Settings</button></nav>` : ""}<div class="side-bottom"><div class="user-mini" data-page="profile" style="cursor:pointer" title="Manage your account profile">${renderUserAvatar(state.user, "avatar")}<div style="min-width:0;flex:1"><div style="font-weight:700" id="sidebarUsername">${esc(state.user.username)}</div><div class="small muted" style="text-transform:capitalize">${esc(state.user.role)}</div></div><button class="btn ghost" id="logoutBtn" style="margin-left:auto;padding:7px 10px" title="Sign out">${ico("logout")}</button></div></div></aside><main class="main"><header class="topbar"><button class="btn ghost mobile-menu" id="menuBtn">${ico("menu")}</button><div class="crumb" id="crumb">Overview</div><div class="top-right"><div class="live-status-pill" id="livePill" title="Real-time WebSocket stream active"><span class="live-dot"></span><span class="live-text">LIVE</span></div><span class="pill"><span style="color:var(--green);display:inline-flex">${ico("statusDot", "sm")}</span> Proxmox infrastructure</span><div data-page="profile" id="topbarAvatarBtn" style="cursor:pointer;display:inline-flex;align-items:center" title="Account profile & settings">${renderUserAvatar(state.user, "avatar")}</div></div></header><div id="nodeAlertContainer" class="node-alerts-wrapper" style="display:none"></div><div class="content" id="content"></div></main></div>`;
+  $("#root").innerHTML = `<div class="app"><div class="sidebar-backdrop" id="sidebarBackdrop"></div><aside class="sidebar" id="sidebar"><div class="sidebar-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">${renderBrandLogo()}<button type="button" class="btn ghost small sidebar-close-btn" id="sidebarCloseBtn" style="display:none;color:var(--muted);padding:4px 8px;font-size:20px;line-height:1;border-radius:6px" title="Close navigation menu">&times;</button></div><div class="nav-label">WORKSPACE</div><nav class="nav"><button data-page="overview" class="active"><span class="ico">${ico("overview")}</span>Overview</button><button data-page="servers"><span class="ico">${ico("servers")}</span>Virtual servers</button><button data-page="profile"><span class="ico">${ico("user")}</span>My Profile</button></nav>${admin ? `<div class="nav-label">ADMINISTRATION</div><nav class="nav"><button data-page="templates"><span class="ico">${ico("layers")}</span>VM Templates</button><button data-page="create-vps"><span class="ico">${ico("zap")}</span>Create VPS</button><button data-page="assign"><span class="ico">${ico("plus")}</span>Assign VPS</button><button data-page="nodes"><span class="ico">${ico("nodes")}</span>Proxmox nodes</button><button data-page="tasks"><span class="ico">${ico("clock")}</span>Cluster tasks</button><button data-page="users"><span class="ico">${ico("users")}</span>Users</button><button data-page="api-keys"><span class="ico">${ico("key")}</span>API Keys</button><button data-page="logs"><span class="ico">${ico("logs")}</span>Audit logs</button><button data-page="settings"><span class="ico">${ico("gear")}</span>Settings</button></nav>` : ""}<div class="side-bottom"><div class="user-mini" data-page="profile" style="cursor:pointer" title="Manage your account profile">${renderUserAvatar(state.user, "avatar")}<div style="min-width:0;flex:1"><div style="font-weight:700" id="sidebarUsername">${esc(state.user.username)}</div><div class="small muted" style="text-transform:capitalize">${esc(state.user.role)}</div></div><button class="btn ghost" id="logoutBtn" style="margin-left:auto;padding:7px 10px" title="Sign out">${ico("logout")}</button></div></div></aside><main class="main"><header class="topbar"><button class="btn ghost mobile-menu" id="menuBtn" aria-label="Toggle navigation menu">${ico("menu")}</button><div class="crumb" id="crumb">Overview</div><div class="top-right"><div class="live-status-pill" id="livePill" title="Real-time WebSocket stream active"><span class="live-dot"></span><span class="live-text">LIVE</span></div><span class="pill" id="infraPill"><span style="color:var(--green);display:inline-flex">${ico("statusDot", "sm")}</span> <span class="pill-text">Proxmox infrastructure</span></span><div data-page="profile" id="topbarAvatarBtn" style="cursor:pointer;display:inline-flex;align-items:center" title="Account profile & settings">${renderUserAvatar(state.user, "avatar")}</div></div></header><div id="nodeAlertContainer" class="node-alerts-wrapper" style="display:none"></div><div class="content" id="content"></div></main></div>`;
   $("#root").addEventListener("click", handleRootClick);
   $("#logoutBtn").onclick = logout;
   const toggleMenu = () => { $("#sidebar")?.classList.toggle("open"); $("#sidebarBackdrop")?.classList.toggle("open"); };
   const closeMenu = () => { $("#sidebar")?.classList.remove("open"); $("#sidebarBackdrop")?.classList.remove("open"); };
   $("#menuBtn").onclick = toggleMenu;
   $("#sidebarBackdrop").onclick = closeMenu;
+  const closeBtn = $("#sidebarCloseBtn");
+  if (closeBtn) closeBtn.onclick = closeMenu;
+
+  // Auto-close drawer on any link or button tap inside the mobile sidebar
+  $("#sidebar")?.addEventListener("click", (e) => {
+    if (window.innerWidth <= 768 && (e.target.closest("button") || e.target.closest("[data-page]"))) {
+      closeMenu();
+    }
+  });
 }
 
 async function handleRootClick(e) {
   if (e.target.closest("#logoutBtn")) return;
   const nav = e.target.closest("[data-page]");
   if (nav) {
+    $("#sidebar")?.classList.remove("open");
+    $("#sidebarBackdrop")?.classList.remove("open");
     startTopLoader();
     try {
       if (state.page === "vps" && nav.dataset.page !== "vps" && liveSocket && state.currentServerId) {
@@ -4154,8 +4504,6 @@ async function handleRootClick(e) {
       // Reset form states on navigation
       if (state.page === "create-vps") state.createVpsState = { type: "qemu", source: "template", ip4Type: "dhcp", ip6Type: "disabled", nodeId: null, cachedData: null };
       if (state.page === "vps") state.editVpsState = { ip4Type: "dhcp", ip6Type: "auto" };
-      $("#sidebar")?.classList.remove("open");
-      $("#sidebarBackdrop")?.classList.remove("open");
       await renderPage();
     } finally {
       finishTopLoader();
@@ -4172,7 +4520,7 @@ async function handleRootClick(e) {
         inp.type = isMasked ? "text" : "password";
         toggleTableKeyBtn.innerHTML = isMasked ? ico("eyeOff", "sm") : ico("eye", "sm");
         toggleTableKeyBtn.title = isMasked ? "Hide API Key" : "Show API Key";
-        inp.style.width = isMasked ? "240px" : "145px";
+        inp.style.width = isMasked ? "320px" : "145px";
       }
     }
     return;
