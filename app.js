@@ -2790,7 +2790,6 @@ app.get("/api/servers/:id/clone/options", requireAuth, requireAdmin, async (req,
         storages = stList.filter(x => x.active === 1).map(x => x.storage).filter(Boolean);
       }
     } catch {}
-    if (!storages.length) storages = ["local-lvm", "nvme-storage", "local"];
 
     const users = db.prepare("SELECT id, username, email, role FROM users WHERE active=1 ORDER BY username ASC").all();
 
@@ -3191,32 +3190,54 @@ app.get("/api/servers/:id/reinstall/options", requireAuth, async (req, res, next
       }
     } else if (s.type === "lxc") {
       try {
+        const vzList = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/storage`);
+        if (Array.isArray(vzList)) {
+          for (const st of vzList) {
+            if (st.content && st.content.includes("vztmpl")) {
+              try {
+                const tmpls = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/storage/${encodeURIComponent(st.storage)}/content?content=vztmpl`);
+                if (Array.isArray(tmpls)) {
+                  for (const t of tmpls) {
+                    if (t.volid) {
+                      templates.push({
+                        id: t.volid,
+                        package: t.volid.split("/").pop(),
+                        name: t.volid.split("/").pop(),
+                        template: t.volid,
+                        type: "lxc",
+                        isLocal: true
+                      });
+                    }
+                  }
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+
+      try {
         const apl = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/aplinfo`);
         if (Array.isArray(apl)) {
           const popular = apl.filter(x => 
             /ubuntu|debian|alpine|almalinux|rocky|centos|archlinux/i.test(x.package) &&
             (x.architecture === "amd64" || !x.architecture)
           );
-          templates = popular.map(x => ({
-            id: x.template,
-            package: x.package,
-            name: x.headline || x.package,
-            template: x.template,
-            type: "lxc"
-          }));
+          for (const x of popular) {
+            if (!templates.some(t => t.id === x.template || t.name === x.package)) {
+              templates.push({
+                id: x.template,
+                package: x.package,
+                name: x.headline || x.package,
+                template: x.template,
+                type: "lxc",
+                isLocal: false
+              });
+            }
+          }
         }
       } catch (err) {
         console.warn("Could not query aplinfo:", err.message);
-      }
-
-      if (templates.length === 0) {
-        templates = [
-          { id: "ubuntu-24.04-standard_24.04-2_amd64.tar.zst", package: "ubuntu-24.04-standard", name: "Ubuntu 24.04 LTS (Standard)", type: "lxc" },
-          { id: "ubuntu-22.04-standard_22.04-1_amd64.tar.zst", package: "ubuntu-22.04-standard", name: "Ubuntu 22.04 LTS (Standard)", type: "lxc" },
-          { id: "debian-12-standard_12.7-1_amd64.tar.zst", package: "debian-12-standard", name: "Debian 12 Bookworm (Standard)", type: "lxc" },
-          { id: "almalinux-9-default_20240911_amd64.tar.xz", package: "almalinux-9-default", name: "AlmaLinux 9 (Default)", type: "lxc" },
-          { id: "alpine-3.24-default_20261105_amd64.tar.xz", package: "alpine-3.24-default", name: "Alpine Linux 3.24 (Default)", type: "lxc" }
-        ];
       }
     }
 
@@ -4653,13 +4674,13 @@ app.get("/api/admin/servers/create/options", requireAuth, requireAdmin, async (r
       nextVmid = (maxRow?.max || 100) + 1;
     }
 
-    // 3. QEMU Templates
+    // 3. QEMU Templates (Real templates on this node or cluster)
     let qemuTemplates = [];
     try {
       const allVms = await pve(node, "GET", "/cluster/resources?type=vm");
       if (Array.isArray(allVms)) {
         qemuTemplates = allVms
-          .filter(v => v.template === 1 && v.type === "qemu")
+          .filter(v => v.template === 1 && v.type === "qemu" && (v.node === pveNode || !v.node))
           .map(v => ({
             id: v.vmid,
             vmid: v.vmid,
@@ -4673,15 +4694,29 @@ app.get("/api/admin/servers/create/options", requireAuth, requireAdmin, async (r
       }
     } catch {}
     if (qemuTemplates.length === 0) {
-      qemuTemplates = [
-        { id: 1003, vmid: 1003, name: "Ubuntu-24.04", type: "qemu", disk: 3758096384 },
-        { id: 4001, vmid: 4001, name: "Debian-12", type: "qemu", disk: 2147483648 }
-      ];
+      try {
+        const qList = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/qemu`);
+        if (Array.isArray(qList)) {
+          qemuTemplates = qList
+            .filter(v => v.template === 1)
+            .map(v => ({
+              id: v.vmid,
+              vmid: v.vmid,
+              name: v.name || `Template ${v.vmid}`,
+              type: "qemu",
+              node: pveNode,
+              disk: v.maxdisk || 0,
+              mem: v.maxmem || 0,
+              cpus: v.maxcpu || 1
+            }));
+        }
+      } catch {}
     }
 
-    // 4. Storages: query all storages on this node
+    // 4. Storages: query real storages on this node
     let allStorages = [];
-    let diskStorages = [];
+    let vmStorages = [];
+    let ctStorages = [];
     let isoStorages = [];
     let vztmplStorages = [];
     try {
@@ -4698,22 +4733,19 @@ app.get("/api/admin/servers/create/options", requireAuth, requireAdmin, async (r
           enabled: s.enabled !== 0 && s.active !== 0
         }));
 
-        diskStorages = allStorages.filter(s => s.enabled && (s.content.includes("images") || s.content.includes("rootdir")));
+        vmStorages = allStorages.filter(s => s.enabled && s.content.includes("images"));
+        ctStorages = allStorages.filter(s => s.enabled && s.content.includes("rootdir"));
         isoStorages = allStorages.filter(s => s.enabled && s.content.includes("iso"));
         vztmplStorages = allStorages.filter(s => s.enabled && s.content.includes("vztmpl"));
       }
     } catch {}
-    if (diskStorages.length === 0) {
-      diskStorages = [
-        { storage: "nvme-storage", type: "lvmthin", avail: 1000000000000, content: "images,rootdir", enabled: true },
-        { storage: "local-lvm", type: "lvmthin", avail: 500000000000, content: "images,rootdir", enabled: true }
-      ];
-    }
 
-    // 5. ISOs across all ISO storages
+    const diskStorages = allStorages.filter(s => s.enabled && (s.content.includes("images") || s.content.includes("rootdir")));
+
+    // 5. ISOs across real ISO storages
     let isoList = [];
     try {
-      const searchStorages = isoStorages.length > 0 ? isoStorages.map(s => s.storage) : ["local", "ISO", "iso"];
+      const searchStorages = isoStorages.length > 0 ? isoStorages.map(s => s.storage) : ["local"];
       for (const st of searchStorages) {
         try {
           const res = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/storage/${encodeURIComponent(st)}/content?content=iso`);
@@ -4733,12 +4765,6 @@ app.get("/api/admin/servers/create/options", requireAuth, requireAdmin, async (r
         } catch {}
       }
     } catch {}
-    if (isoList.length === 0) {
-      isoList = [
-        { volid: "local:iso/ubuntu-24.04-live-server-amd64.iso", name: "Ubuntu 24.04 Live Server (local)", size: 2147483648, storage: "local" },
-        { volid: "local:iso/debian-12.7.0-amd64-netinst.iso", name: "Debian 12.7 Netinst (local)", size: 650117120, storage: "local" }
-      ];
-    }
 
     // 6. LXC Templates: (A) Locally downloaded vztmpl + (B) Online appliance repository
     let localLxcTemplates = [];
@@ -4786,18 +4812,10 @@ app.get("/api/admin/servers/create/options", requireAuth, requireAdmin, async (r
     let lxcTemplates = [...localLxcTemplates];
     if (onlineLxcTemplates.length > 0) {
       for (const onl of onlineLxcTemplates) {
-        if (!lxcTemplates.some(t => t.volid.includes(onl.volid) || t.package === onl.volid)) {
+        if (!lxcTemplates.some(t => t.volid === onl.volid || t.package === onl.package)) {
           lxcTemplates.push(onl);
         }
       }
-    }
-    if (lxcTemplates.length === 0) {
-      lxcTemplates = [
-        { volid: "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst", package: "ubuntu-24.04-standard", name: "Ubuntu 24.04 LTS (Standard)", isLocal: true },
-        { volid: "ubuntu-24.04-standard_24.04-2_amd64.tar.zst", package: "ubuntu-24.04-standard", name: "Ubuntu 24.04 LTS (Standard)", isLocal: false },
-        { volid: "debian-12-standard_12.7-1_amd64.tar.zst", package: "debian-12-standard", name: "Debian 12 Bookworm (Standard)", isLocal: false },
-        { volid: "alpine-3.20-default_20240606_amd64.tar.xz", package: "alpine-3.20-default", name: "Alpine Linux 3.20 (Default)", isLocal: false }
-      ];
     }
 
     // 7. Network Bridges: Real live interfaces from Proxmox
@@ -4828,7 +4846,39 @@ app.get("/api/admin/servers/create/options", requireAuth, requireAdmin, async (r
       return a.iface.localeCompare(b.iface);
     });
 
-    // 8. Check Datastore permissions
+    // 8. CPU Models: Query real supported CPU capabilities from Proxmox VE
+    let pveCpuModels = [];
+    try {
+      const caps = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/capabilities/qemu/cpu`);
+      if (Array.isArray(caps)) {
+        pveCpuModels = caps.map(c => ({
+          name: c.name,
+          vendor: c.vendor || "",
+          custom: c.custom === 1
+        }));
+      }
+    } catch {}
+
+    const standardCpus = [
+      { name: "host", desc: "host (Host CPU passthrough - Maximum performance & AES-NI)" },
+      { name: "x86-64-v2-AES", desc: "x86-64-v2-AES (Recommended for cluster migration)" },
+      { name: "x86-64-v3", desc: "x86-64-v3 (AVX, AVX2, modern instructions)" },
+      { name: "kvm64", desc: "kvm64 (Proxmox standard universal compatibility)" },
+      { name: "qemu64", desc: "qemu64 (QEMU default)" },
+      { name: "max", desc: "max (All features supported by host)" }
+    ];
+
+    const cpuModels = [...standardCpus];
+    for (const p of pveCpuModels) {
+      if (!cpuModels.some(c => c.name === p.name)) {
+        cpuModels.push({
+          name: p.name,
+          desc: `${p.name} ${p.vendor ? `(${p.vendor})` : ''}`
+        });
+      }
+    }
+
+    // 9. Check Datastore permissions
     let datastorePermissionRequired = false;
     try {
       const perms = await pve(node, "GET", "/access/permissions");
@@ -4851,7 +4901,12 @@ app.get("/api/admin/servers/create/options", requireAuth, requireAdmin, async (r
       localLxcTemplates,
       isoList,
       storages: diskStorages,
+      vmStorages,
+      ctStorages,
+      isoStorages,
+      vztmplStorages,
       allStorages,
+      cpuModels,
       bridges,
       datastorePermissionRequired
     });
@@ -5631,19 +5686,26 @@ app.get("/api/admin/templates/options", requireAuth, requireAdmin, async (req, r
       } catch {}
 
       // 3. Storages on this node
+      let vmStorages = [];
+      let ctStorages = [];
+      let allStorages = [];
       try {
         const sList = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/storage`);
         if (Array.isArray(sList)) {
-          storages = sList
-            .filter(s => s.active !== 0 && s.enabled !== 0 && (s.content && (s.content.includes("images") || s.content.includes("rootdir") || s.content.includes("vztmpl"))))
-            .map(s => ({
-              storage: s.storage,
-              type: s.type || "",
-              content: s.content || "",
-              avail: s.avail || 0,
-              total: s.total || 0,
-              used: s.used || 0
-            }));
+          allStorages = sList.map(s => ({
+            storage: s.storage,
+            type: s.type || "",
+            content: s.content || "",
+            avail: s.avail || 0,
+            total: s.total || 0,
+            used: s.used || 0,
+            shared: s.shared === 1,
+            enabled: s.enabled !== 0 && s.active !== 0
+          }));
+
+          storages = allStorages.filter(s => s.enabled && (s.content.includes("images") || s.content.includes("rootdir") || s.content.includes("vztmpl")));
+          vmStorages = allStorages.filter(s => s.enabled && s.content.includes("images"));
+          ctStorages = allStorages.filter(s => s.enabled && s.content.includes("rootdir"));
 
           // Downloaded local vztmpl from storages
           for (const st of sList) {
@@ -5734,6 +5796,54 @@ app.get("/api/admin/templates/options", requireAuth, requireAdmin, async (req, r
       if (bridges.length === 0) {
         bridges = [{ iface: "vmbr0", active: true, cidr: "", gateway: "" }];
       }
+
+      // 6. CPU Models (Query capabilities from Proxmox VE)
+      let pveCpuModels = [];
+      try {
+        const caps = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/capabilities/qemu/cpu`);
+        if (Array.isArray(caps)) {
+          pveCpuModels = caps.map(c => ({
+            name: c.name,
+            vendor: c.vendor || "",
+            custom: c.custom === 1
+          }));
+        }
+      } catch {}
+
+      const standardCpus = [
+        { name: "host", desc: "host (Host CPU passthrough - Maximum performance & AES-NI)" },
+        { name: "x86-64-v2-AES", desc: "x86-64-v2-AES (Recommended for cluster migration)" },
+        { name: "x86-64-v3", desc: "x86-64-v3 (AVX, AVX2, modern instructions)" },
+        { name: "kvm64", desc: "kvm64 (Proxmox standard universal compatibility)" },
+        { name: "qemu64", desc: "qemu64 (QEMU default)" },
+        { name: "max", desc: "max (All features supported by host)" }
+      ];
+
+      const cpuModels = [...standardCpus];
+      for (const p of pveCpuModels) {
+        if (!cpuModels.some(c => c.name === p.name)) {
+          cpuModels.push({
+            name: p.name,
+            desc: `${p.name} ${p.vendor ? `(${p.vendor})` : ''}`
+          });
+        }
+      }
+
+      return res.json({
+        nodes,
+        users,
+        selectedNodeId: nodeId,
+        nextVmid,
+        nodeStats,
+        lxcTemplates,
+        qemuTemplates,
+        storages,
+        vmStorages,
+        ctStorages,
+        allStorages,
+        cpuModels,
+        bridges
+      });
     }
 
     res.json({

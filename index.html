@@ -5023,7 +5023,7 @@ async function loadReinstallTab(id) {
     if (templates.length > 0) {
       osOptionsHtml = templates.map((t, idx) => `<option value="${esc(t.id || t.vmid || t.template)}" ${idx === 0 ? "selected" : ""}>${esc(t.name)} ${t.vmid ? `(VMID ${t.vmid})` : ""}</option>`).join("");
     } else {
-      osOptionsHtml = `<option value="1003">Ubuntu 24.04 LTS (Template 1003)</option><option value="4001">Debian 12 (Template 4001)</option>`;
+      osOptionsHtml = `<option value="" disabled selected>No operating system templates found on this node.</option>`;
     }
     wrap.innerHTML = `<div class="panel-title"><div><h3>${ico("disc")} Reinstall Operating System (${esc(server.type.toUpperCase())} · VMID ${server.vmid})</h3><p class="muted small" style="margin:4px 0 0">Deploy a clean operating system template. Preserves CPU, RAM, and Network MAC configuration.</p></div></div><div class="notice" style="border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.05);color:#fca5a5;margin-top:0;margin-bottom:20px;border-radius:12px;padding:14px"><b>${ico("alert", "sm", "color:var(--red)")} WARNING: This operation will completely format the primary disk!</b><div style="font-size:12px;margin-top:4px;color:#fca5a5">All existing files, data, and user software on this VPS will be permanently wiped.</div></div>${d.datastorePermissionRequired ? `<div class="notice" style="border-color:rgba(234,179,8,0.2);background:rgba(234,179,8,0.05);color:#fbbf24;margin-top:0;margin-bottom:20px;border-radius:12px;padding:14px;font-size:12px"><b>${ico("lightbulb", "sm", "color:var(--yellow)")} Proxmox Permission Notice:</b> To clone and create new virtual disks, API token <code>${esc(server.node_name)}</code> needs the <code>PVEDatastoreUser</code> or <code>Administrator</code> role on path <code>/</code> in Proxmox VE (Datacenter -> Permissions).</div>` : ''}<form id="reinstallTabForm" style="max-width:650px"><div class="field"><label>Choose Operating System / Distribution Template</label><select name="templateId" id="reinstallTemplateSelect" required>${osOptionsHtml}</select></div><div class="field"><label style="display:flex;justify-content:space-between"><span>New Root Password (min 8 chars)</span><a href="javascript:void(0)" id="genPassTabBtn" style="color:var(--accent);font-size:11px">${ico("dice", "sm")} Generate Strong Password</a></label><div style="position:relative"><input name="password" id="reinstallTabPassword" type="password" minlength="8" required placeholder="Enter new root password" style="padding-right:45px"><button type="button" id="togglePassTabBtn" class="toggle-pwd-btn" data-target="reinstallTabPassword" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;color:#888;padding:4px 8px;font-size:13px;border:none;cursor:pointer" title="Show/Hide Password">${ico("eye")}</button></div></div><div class="field"><label>Hostname (optional)</label><input name="hostname" value="${esc(server.name)}" placeholder="${esc(server.name)}"></div><div class="field"><label>SSH Public Key (optional, for passwordless root SSH)</label><textarea name="sshKey" rows="2" placeholder="ssh-ed25519 AAAAC3... or ssh-rsa AAAAB3..." style="background:#0d0d0d;border:1px solid #303030;border-radius:8px;padding:9px;color:white;width:100%;font-size:11px;font-family:'Space Grotesk',monospace;resize:vertical"></textarea></div><div style="margin:18px 0;display:flex;align-items:flex-start;gap:9px"><input type="checkbox" id="reinstallTabConfirmCheck" style="margin-top:3px;cursor:pointer"><label for="reinstallTabConfirmCheck" style="font-size:12px;color:#ddd;cursor:pointer;line-height:1.4">I confirm that I want to wipe this VPS and reinstall with the selected operating system.</label></div><button type="submit" class="btn danger" id="reinstallTabSubmitBtn" disabled style="padding:12px 24px;font-weight:700">${ico("alert")} Wipe and Reinstall OS</button></form>`;
     const passInput = $("#reinstallTabPassword"), toggleBtn = $("#togglePassTabBtn"), genBtn = $("#genPassTabBtn"), check = $("#reinstallTabConfirmCheck"), submitBtn = $("#reinstallTabSubmitBtn");
@@ -7009,7 +7009,7 @@ function renderCreateVpsForm(c, d) {
         return `<option value="${esc(t.vmid)}" ${idx === 0 ? "selected" : ""}>${esc(t.name)} (VMID ${t.vmid})${diskStr} · QEMU Cloud-Init</option>`;
       }).join("");
     } else {
-      templateOptionsHtml = '<option value="1003">Ubuntu-24.04 (VMID 1003) · QEMU Cloud-Init</option><option value="4001">Debian-12 (VMID 4001) · QEMU Cloud-Init</option>';
+      templateOptionsHtml = `<option value="" disabled selected>No QEMU Cloud-Init templates found on this node (${esc(d.pveNode || currentNode.name)}). Convert a VM to template in Proxmox to clone.</option>`;
     }
   } else {
     const locals = (d.lxcTemplates || []).filter(t => t.isLocal || (typeof t.volid === "string" && t.volid.startsWith("local:")));
@@ -7035,7 +7035,7 @@ function renderCreateVpsForm(c, d) {
       }).join("");
       lHtml += '</optgroup>';
     }
-    templateOptionsHtml = lHtml || '<option value="ubuntu-24.04-standard_24.04-2_amd64.tar.zst">Ubuntu 24.04 LTS (standard)</option><option value="debian-12-standard_12.7-1_amd64.tar.zst">Debian 12 Bookworm (standard)</option>';
+    templateOptionsHtml = lHtml || `<option value="" disabled selected>No LXC templates found on this node (${esc(d.pveNode || currentNode.name)}). Download a template in Proxmox storage.</option>`;
   }
 
   // 2. ISO options
@@ -7050,16 +7050,43 @@ function renderCreateVpsForm(c, d) {
     }).join("");
     isoOptionsHtml += '<option value="__custom__">Custom ISO Volume ID…</option>';
   } else {
-    isoOptionsHtml = '<option value="__custom__">Enter custom ISO path (e.g. local:iso/os.iso)</option>';
+    isoOptionsHtml = `<option value="" disabled selected>No ISO images found on this node (${esc(d.pveNode || currentNode.name)})</option><option value="__custom__">Custom ISO Volume ID…</option>`;
   }
 
-  // 3. Storage Pools
-  const storagesList = (d.storages && d.storages.length ? d.storages : ["nvme-storage", "local-lvm"]);
-  const storagesHtml = storagesList.map((s, idx) => {
-    const name = typeof s === "object" ? (s.storage || s.name || "storage") : s;
-    const isSelected = name === "nvme-storage" || (idx === 0 && !storagesList.some(x => (typeof x === "object" ? x.storage : x) === "nvme-storage"));
-    const availStr = typeof s === "object" && s.avail ? ` — ${formatBytes(s.avail)} free (${s.type || 'storage'})` : "";
-    return `<option value="${esc(name)}" ${isSelected ? "selected" : ""}>${esc(name)}${esc(availStr)}</option>`;
+  // 3. Storage Pools: Filtered by virtualization type (images for QEMU, rootdir for LXC)
+  let rawStorages = [];
+  if (isQemu) {
+    rawStorages = (d.vmStorages && d.vmStorages.length) ? d.vmStorages : (d.storages || []).filter(s => (s.content || "").includes("images"));
+  } else {
+    rawStorages = (d.ctStorages && d.ctStorages.length) ? d.ctStorages : (d.storages || []).filter(s => (s.content || "").includes("rootdir"));
+  }
+  if (!rawStorages.length && d.storages && d.storages.length) {
+    rawStorages = d.storages;
+  }
+  let storagesHtml = "";
+  if (rawStorages.length > 0) {
+    storagesHtml = rawStorages.map((s, idx) => {
+      const name = typeof s === "object" ? (s.storage || s.name || "storage") : s;
+      const isSelected = idx === 0;
+      const availStr = typeof s === "object" && s.avail ? ` — ${formatBytes(s.avail)} free (${s.type || 'storage'})` : "";
+      return `<option value="${esc(name)}" ${isSelected ? "selected" : ""}>${esc(name)}${esc(availStr)}</option>`;
+    }).join("");
+  } else {
+    storagesHtml = `<option value="" disabled selected>No storage pool supporting ${isQemu ? 'VM images' : 'LXC rootdir'} found on this node (${esc(d.pveNode || currentNode.name)})</option>`;
+  }
+
+  // CPU Architecture options (real Proxmox CPU models + universal standards)
+  const cpuOptionsHtml = (d.cpuModels && d.cpuModels.length ? d.cpuModels : [
+    { name: "host", desc: "host (Host CPU passthrough - Maximum performance & AES-NI)" },
+    { name: "x86-64-v2-AES", desc: "x86-64-v2-AES (Recommended for cluster migration)" },
+    { name: "x86-64-v3", desc: "x86-64-v3 (AVX, AVX2, modern instructions)" },
+    { name: "kvm64", desc: "kvm64 (Proxmox standard universal compatibility)" },
+    { name: "qemu64", desc: "qemu64 (QEMU default)" },
+    { name: "max", desc: "max (All features supported by host)" }
+  ]).map((c, idx) => {
+    const val = typeof c === "object" ? c.name : c;
+    const desc = typeof c === "object" ? (c.desc || c.name) : c;
+    return `<option value="${esc(val)}" ${val === "host" || idx === 0 ? "selected" : ""}>${esc(desc)}</option>`;
   }).join("");
 
   // 4. Bridges
@@ -7268,12 +7295,7 @@ function renderCreateVpsForm(c, d) {
             <div class="field">
               <label>CPU Type / Architecture</label>
               <select name="cpu">
-                <option value="host" selected>host (Host CPU passthrough - Maximum performance & AES-NI)</option>
-                <option value="x86-64-v2-AES">x86-64-v2-AES (Recommended for cluster migration)</option>
-                <option value="x86-64-v3">x86-64-v3 (AVX, AVX2, modern instructions)</option>
-                <option value="kvm64">kvm64 (Proxmox standard universal compatibility)</option>
-                <option value="qemu64">qemu64 (QEMU default)</option>
-                <option value="max">max (All features supported by host)</option>
+                ${cpuOptionsHtml}
               </select>
             </div>
           ` : `
@@ -8300,7 +8322,7 @@ async function templateModal(templateId = null, initialTab = "specs") {
         }).join("");
         lHtml += '</optgroup>';
       }
-      osOptionsHtml = lHtml || (opts.lxcTemplates || []).map(t => `<option value="${esc(t.volid)}">${esc(t.name || t.volid)}</option>`).join("");
+      osOptionsHtml = lHtml || (opts.lxcTemplates && opts.lxcTemplates.length ? opts.lxcTemplates.map(t => `<option value="${esc(t.volid)}">${esc(t.name || t.volid)}</option>`).join("") : `<option value="" disabled selected>No LXC templates found on this node. Please download a template in Proxmox storage.</option>`);
     } else {
       if (opts.qemuTemplates && opts.qemuTemplates.length) {
         osOptionsHtml = opts.qemuTemplates.map(t => {
@@ -8310,20 +8332,34 @@ async function templateModal(templateId = null, initialTab = "specs") {
           return `<option value="${t.vmid}" ${isSel ? "selected" : ""}>${esc(t.name)} (VMID ${t.vmid})${sz}${nodeStr} · Cloud-Init</option>`;
         }).join("");
       } else {
-        osOptionsHtml = `<option value="">No QEMU Cloud-Init templates found on this node. Please convert a VM to template in Proxmox.</option>`;
+        osOptionsHtml = `<option value="" disabled selected>No QEMU Cloud-Init templates found on this node. Please convert a VM to template in Proxmox.</option>`;
       }
     }
 
     // 2. Real Proxmox Nodes
     const nodesHtml = (opts.nodes || []).map(n => `<option value="${n.id}" ${n.id === currentNodeId ? "selected" : ""}>${esc(n.name)} (${esc(n.host)})</option>`).join("");
 
-    // 3. Real Proxmox Storages with free space
-    const storageHtml = (opts.storages && opts.storages.length ? opts.storages : [{ storage: "local-lvm", avail: 0 }]).map(s => {
-      const name = typeof s === "object" ? s.storage : s;
-      const isSel = template ? template.storage === name : (name === "nvme-storage" || name === "local-lvm");
-      const freeStr = typeof s === "object" && s.avail ? ` — ${formatBytes(s.avail)} free (${s.type || 'storage'})` : "";
-      return `<option value="${esc(name)}" ${isSel ? "selected" : ""}>${esc(name)}${esc(freeStr)}</option>`;
-    }).join("");
+    // 3. Real Proxmox Storages with free space (Filtered by type: images for QEMU, rootdir for LXC)
+    let rawTmplStorages = [];
+    if (isLxc) {
+      rawTmplStorages = (opts.ctStorages && opts.ctStorages.length) ? opts.ctStorages : (opts.storages || []).filter(s => (s.content || "").includes("rootdir"));
+    } else {
+      rawTmplStorages = (opts.vmStorages && opts.vmStorages.length) ? opts.vmStorages : (opts.storages || []).filter(s => (s.content || "").includes("images"));
+    }
+    if (!rawTmplStorages.length && opts.storages && opts.storages.length) {
+      rawTmplStorages = opts.storages;
+    }
+    let storageHtml = "";
+    if (rawTmplStorages.length > 0) {
+      storageHtml = rawTmplStorages.map((s, idx) => {
+        const name = typeof s === "object" ? s.storage : s;
+        const isSel = template ? template.storage === name : (idx === 0);
+        const freeStr = typeof s === "object" && s.avail ? ` — ${formatBytes(s.avail)} free (${s.type || 'storage'})` : "";
+        return `<option value="${esc(name)}" ${isSel ? "selected" : ""}>${esc(name)}${esc(freeStr)}</option>`;
+      }).join("");
+    } else {
+      storageHtml = `<option value="" disabled selected>No storage pool supporting ${isLxc ? 'LXC rootdir' : 'VM images'} found on this node</option>`;
+    }
 
     // 4. Real Proxmox Network Bridges
     const bridgeList = (opts.bridges && opts.bridges.length ? opts.bridges : [{ iface: "vmbr0", active: true }]);
@@ -8344,9 +8380,9 @@ async function templateModal(templateId = null, initialTab = "specs") {
     let initialSource = template?.template_source || "";
     if (!initialSource) {
       if (isLxc) {
-        initialSource = opts.lxcTemplates?.[0]?.volid || "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst";
+        initialSource = opts.lxcTemplates?.[0]?.volid || "";
       } else {
-        initialSource = opts.qemuTemplates?.[0]?.vmid ? String(opts.qemuTemplates[0].vmid) : "1003";
+        initialSource = opts.qemuTemplates?.[0]?.vmid ? String(opts.qemuTemplates[0].vmid) : "";
       }
     }
 
@@ -8516,7 +8552,10 @@ async function templateModal(templateId = null, initialTab = "specs") {
               </div>
               <div class="field">
                 <label>CPU Model</label>
-                <input type="text" name="cpu" value="${esc(template?.cpu || 'host')}" placeholder="host">
+                <input type="text" name="cpu" list="tmplCpuModelsList" value="${esc(template?.cpu || 'host')}" placeholder="host">
+                <datalist id="tmplCpuModelsList">
+                  ${(opts.cpuModels || []).map(c => `<option value="${esc(typeof c === 'object' ? c.name : c)}">${esc(typeof c === 'object' ? (c.desc || c.name) : c)}</option>`).join('')}
+                </datalist>
               </div>
               <div class="field">
                 <label>RAM (MB) *</label>
@@ -9216,7 +9255,7 @@ async function deployTemplateModal(templateId) {
       deployOsOptionsHtml += '</optgroup>';
     }
     if (!deployOsOptionsHtml) {
-      deployOsOptionsHtml = (opts.lxcTemplates || []).map(t => `<option value="${esc(t.volid)}">${esc(t.name || t.volid)}</option>`).join("");
+      deployOsOptionsHtml = (opts.lxcTemplates && opts.lxcTemplates.length) ? (opts.lxcTemplates || []).map(t => `<option value="${esc(t.volid)}">${esc(t.name || t.volid)}</option>`).join("") : `<option value="" disabled selected>No LXC templates found on this node. Please download a template in Proxmox storage.</option>`;
     }
   } else {
     if (opts.qemuTemplates && opts.qemuTemplates.length) {
@@ -9227,7 +9266,7 @@ async function deployTemplateModal(templateId) {
         return `<option value="${t.vmid}" ${isSel ? "selected" : ""}>${esc(t.name)} (VMID ${t.vmid})${sz}${nodeStr} · Cloud-Init</option>`;
       }).join("");
     } else {
-      deployOsOptionsHtml = `<option value="">No QEMU Cloud-Init templates found on this node. Please convert a VM to template in Proxmox.</option>`;
+      deployOsOptionsHtml = `<option value="" disabled selected>No QEMU Cloud-Init templates found on this node. Please convert a VM to template in Proxmox.</option>`;
     }
   }
 
