@@ -3204,7 +3204,23 @@ function ico(name, cls = "", style = "") {
   return `<svg class="svg-ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"${st}>${body}</svg>`;
 }
 
+window._recentToasts = window._recentToasts || new Map();
 function toast(message, type = "success") {
+  if (!message) return;
+  const key = `${type}:${String(message).trim()}`;
+  const now = Date.now();
+  const lastTime = window._recentToasts.get(key) || 0;
+  // Deduplicate identical toasts appearing within 1500ms
+  if (now - lastTime < 1500) {
+    return;
+  }
+  window._recentToasts.set(key, now);
+  if (window._recentToasts.size > 50) {
+    for (const [k, t] of window._recentToasts.entries()) {
+      if (now - t > 10000) window._recentToasts.delete(k);
+    }
+  }
+
   const el = document.createElement("div");
   el.className = `toast ${type}`;
   const icon = type === "error" ? ico("alert", "", "color:var(--red)") : type === "warning" ? ico("zap", "", "color:var(--yellow)") : ico("check", "", "color:var(--green)");
@@ -3224,33 +3240,59 @@ function getDismissedNodesMap() {
   }
 }
 
-function isNodeAlertDismissed(nodeName) {
-  if (!nodeName) return false;
+function isNodeAlertDismissed(nodeName, nodeId = null) {
+  if (!nodeName && !nodeId) return false;
   const map = getDismissedNodesMap();
-  return !!map[String(nodeName).toLowerCase()];
+  const nameKey = nodeName ? String(nodeName).trim().toLowerCase() : "";
+  const idKey = (nodeId !== null && nodeId !== undefined && String(nodeId).trim()) ? String(nodeId).trim().toLowerCase() : "";
+  if (nameKey && map[nameKey]) return true;
+  if (idKey && map[idKey]) return true;
+  return false;
 }
 
-function dismissNodeAlert(nodeName, permanent = true) {
-  if (!nodeName) return;
-  const key = String(nodeName).toLowerCase();
-  window._offlineNodes.delete(key);
+function dismissNodeAlert(nodeName, nodeId = null, permanent = true) {
+  if (!nodeName && !nodeId) return;
+  const nameKey = nodeName ? String(nodeName).trim().toLowerCase() : "";
+  const idKey = (nodeId !== null && nodeId !== undefined && String(nodeId).trim()) ? String(nodeId).trim().toLowerCase() : "";
+
+  // Delete all occurrences from in-memory offline map
+  if (nameKey) window._offlineNodes.delete(nameKey);
+  if (idKey) window._offlineNodes.delete(idKey);
+  for (const [k, v] of window._offlineNodes.entries()) {
+    if ((nameKey && v.name && v.name.toLowerCase() === nameKey) || (idKey && v.id && String(v.id) === idKey)) {
+      window._offlineNodes.delete(k);
+    }
+  }
+
   if (permanent) {
     const map = getDismissedNodesMap();
-    map[key] = { dismissedAt: Date.now(), nodeName: String(nodeName) };
+    const entry = { dismissedAt: Date.now(), nodeName: String(nodeName || nodeId) };
+    if (nameKey) map[nameKey] = entry;
+    if (idKey) map[idKey] = entry;
     try {
       localStorage.setItem(DISMISSED_NODES_KEY, JSON.stringify(map));
     } catch (e) {}
-    toast(`Proxmox Node "${nodeName}" alert dismissed & muted. You will not receive further repeated alerts.`, "info");
+    toast(`Proxmox Node "${nodeName || nodeId}" alert dismissed & muted. You will not receive further repeated alerts.`, "info");
   }
+
   renderDynamicNodeAlerts();
 }
 
-function unmarkNodeDismissed(nodeName) {
-  if (!nodeName) return;
-  const key = String(nodeName).toLowerCase();
+function unmarkNodeDismissed(nodeName, nodeId = null) {
+  if (!nodeName && !nodeId) return;
+  const nameKey = nodeName ? String(nodeName).trim().toLowerCase() : "";
+  const idKey = (nodeId !== null && nodeId !== undefined && String(nodeId).trim()) ? String(nodeId).trim().toLowerCase() : "";
   const map = getDismissedNodesMap();
-  if (map[key]) {
-    delete map[key];
+  let changed = false;
+  if (nameKey && map[nameKey]) {
+    delete map[nameKey];
+    changed = true;
+  }
+  if (idKey && map[idKey]) {
+    delete map[idKey];
+    changed = true;
+  }
+  if (changed) {
     try {
       localStorage.setItem(DISMISSED_NODES_KEY, JSON.stringify(map));
     } catch (e) {}
@@ -3264,22 +3306,37 @@ window.isNodeAlertDismissed = isNodeAlertDismissed;
 
 function showDynamicNodeAlert(nodeName, reason = "timeout", host = "", nodeId = null) {
   if (!nodeName) nodeName = "Proxmox Node";
-  if (isNodeAlertDismissed(nodeName)) return; // Muted by user
-  const key = String(nodeId || nodeName).toLowerCase();
+  if (isNodeAlertDismissed(nodeName, nodeId)) return; // Muted by user
+  // Normalize key by lowercased nodeName
+  const key = String(nodeName).trim().toLowerCase();
   window._offlineNodes.set(key, { id: nodeId, name: nodeName, host: host || "", reason: reason || "timeout" });
   renderDynamicNodeAlerts();
 }
 
 function removeDynamicNodeAlert(nodeName, nodeId = null) {
-  const key = String(nodeId || nodeName).toLowerCase();
-  window._offlineNodes.delete(key);
-  if (nodeName) unmarkNodeDismissed(nodeName);
+  const nameKey = nodeName ? String(nodeName).trim().toLowerCase() : "";
+  const idKey = (nodeId !== null && nodeId !== undefined && String(nodeId).trim()) ? String(nodeId).trim().toLowerCase() : "";
+  if (nameKey) window._offlineNodes.delete(nameKey);
+  if (idKey) window._offlineNodes.delete(idKey);
+  for (const [k, v] of window._offlineNodes.entries()) {
+    if ((nameKey && v.name && v.name.toLowerCase() === nameKey) || (idKey && v.id && String(v.id) === idKey)) {
+      window._offlineNodes.delete(k);
+    }
+  }
+  if (nodeName || nodeId) unmarkNodeDismissed(nodeName, nodeId);
   renderDynamicNodeAlerts();
 }
 
 function renderDynamicNodeAlerts() {
   const container = $("#nodeAlertContainer");
   if (!container) return;
+
+  // Filter out any dismissed or muted nodes
+  for (const [k, n] of window._offlineNodes.entries()) {
+    if (isNodeAlertDismissed(n.name, n.id)) {
+      window._offlineNodes.delete(k);
+    }
+  }
 
   if (window._offlineNodes.size === 0) {
     container.style.display = "none";
@@ -3290,9 +3347,9 @@ function renderDynamicNodeAlerts() {
   container.style.display = "block";
   const alertsHtml = Array.from(window._offlineNodes.values()).map(n => {
     const isTimeout = n.reason === "timeout";
-    const safeNodeId = n.id ? String(n.id) : "";
+    const safeNodeId = (n.id !== null && n.id !== undefined) ? String(n.id) : "";
     return `
-      <div class="node-alert-card notice-danger" data-node-key="${esc(n.name)}">
+      <div class="node-alert-card notice-danger" data-node-key="${esc(n.name)}" data-node-id="${safeNodeId}">
         <div class="node-alert-icon-box">
           ${ico("alert")}
         </div>
@@ -3308,10 +3365,10 @@ function renderDynamicNodeAlerts() {
           </div>
         </div>
         <div class="node-alert-actions">
-          <button type="button" class="btn small" data-action="retry-node" data-node-name="${esc(n.name)}" data-node-id="${safeNodeId}" style="background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);color:#fff;display:inline-flex;align-items:center;gap:6px" onclick="retryNodeCheck('${esc(n.name)}', ${n.id ? n.id : 'null'})">
+          <button type="button" class="btn small" data-action="retry-node" data-node-name="${esc(n.name)}" data-node-id="${safeNodeId}" style="background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);color:#fff;display:inline-flex;align-items:center;gap:6px">
             ${ico("refresh", "sm")} Retry Node
           </button>
-          <button type="button" class="btn ghost small" data-action="dismiss-node-alert" data-node-name="${esc(n.name)}" style="padding:4px 10px;color:#fca5a5;border:1px solid rgba(239,68,68,0.3);background:rgba(239,68,68,0.1);display:inline-flex;align-items:center;gap:5px;border-radius:6px" title="Dismiss and mute warnings" onclick="dismissNodeAlert('${esc(n.name)}')">
+          <button type="button" class="btn ghost small" data-action="dismiss-node-alert" data-node-name="${esc(n.name)}" data-node-id="${safeNodeId}" style="padding:4px 10px;color:#fca5a5;border:1px solid rgba(239,68,68,0.3);background:rgba(239,68,68,0.1);display:inline-flex;align-items:center;gap:5px;border-radius:6px" title="Dismiss and mute warnings">
             ✕ Dismiss & Mute
           </button>
         </div>
@@ -3340,7 +3397,7 @@ async function retryNodeCheck(nodeName, nodeId) {
       if (found && found.status === "online") success = true;
     }
     if (success) {
-      unmarkNodeDismissed(nodeName);
+      unmarkNodeDismissed(nodeName, nodeId);
       removeDynamicNodeAlert(nodeName, nodeId);
       toast(`✓ Proxmox Node "${nodeName}" connection restored!`, "success");
       renderPage();
@@ -3363,6 +3420,7 @@ document.addEventListener("click", (e) => {
   const retryBtn = e.target.closest && e.target.closest('[data-action="retry-node"]');
   if (retryBtn) {
     e.preventDefault();
+    e.stopPropagation();
     const nodeName = retryBtn.getAttribute("data-node-name");
     const nodeIdStr = retryBtn.getAttribute("data-node-id");
     const nodeId = nodeIdStr ? parseInt(nodeIdStr, 10) : null;
@@ -3372,8 +3430,11 @@ document.addEventListener("click", (e) => {
   const dismissBtn = e.target.closest && e.target.closest('[data-action="dismiss-node-alert"]');
   if (dismissBtn) {
     e.preventDefault();
+    e.stopPropagation();
     const nodeName = dismissBtn.getAttribute("data-node-name");
-    dismissNodeAlert(nodeName, true);
+    const nodeIdStr = dismissBtn.getAttribute("data-node-id");
+    const nodeId = nodeIdStr ? parseInt(nodeIdStr, 10) : null;
+    dismissNodeAlert(nodeName, nodeId, true);
     return;
   }
 });
@@ -13204,7 +13265,7 @@ function initSocketConnection() {
     console.warn("Socket.io client script not loaded.");
     return;
   }
-  if (liveSocket && liveSocket.connected) return;
+  if (liveSocket) return;
 
   try {
     liveSocket = io({
@@ -13227,7 +13288,7 @@ function initSocketConnection() {
       api("/nodes/health").then(res => {
         if (res && res.nodes) {
           res.nodes.forEach(n => {
-            if (n.status === "offline" && !isNodeAlertDismissed(n.name)) {
+            if (n.status === "offline" && !isNodeAlertDismissed(n.name, n.id)) {
               showDynamicNodeAlert(n.name, n.reason, n.host, n.id);
             }
           });
@@ -13238,7 +13299,7 @@ function initSocketConnection() {
     liveSocket.on("node_health_alert", (d) => {
       if (!d) return;
       if (d.status === "offline") {
-        if (!isNodeAlertDismissed(d.node_name)) {
+        if (!isNodeAlertDismissed(d.node_name, d.node_id)) {
           showDynamicNodeAlert(d.node_name, d.reason, d.node_host, d.node_id);
           window._nodeToastTracker = window._nodeToastTracker || {};
           const toastKey = `last_toast_${String(d.node_name).toLowerCase()}`;
@@ -13249,9 +13310,15 @@ function initSocketConnection() {
           }
         }
       } else if (d.status === "online") {
-        unmarkNodeDismissed(d.node_name);
+        unmarkNodeDismissed(d.node_name, d.node_id);
         removeDynamicNodeAlert(d.node_name, d.node_id);
-        toast(`✓ Proxmox Node "${d.node_name}" is back online!`, "success");
+        window._nodeOnlineToastTracker = window._nodeOnlineToastTracker || {};
+        const onlineKey = `online_${String(d.node_name).toLowerCase()}`;
+        const lastOnline = window._nodeOnlineToastTracker[onlineKey] || 0;
+        if (Date.now() - lastOnline > 5000) {
+          window._nodeOnlineToastTracker[onlineKey] = Date.now();
+          toast(`✓ Proxmox Node "${d.node_name}" is back online!`, "success");
+        }
       }
     });
 
@@ -13596,7 +13663,6 @@ async function boot() {
     state.user = d.user;
     state.csrf = d.csrfToken;
     await loadDashboard();
-    initSocketConnection();
   } catch {
     try {
       const st = await fetch("/api/setup/status").then(r => r.json()).catch(() => ({ needSetup: false }));

@@ -1425,6 +1425,7 @@ function markNodeOnline(node) {
   if (!node || !node.id) return;
   const prev = nodeHealthState.get(node.id);
   if (prev && prev.status === "offline") {
+    prev.status = "online"; // Immediate state transition to prevent race conditions
     nodeHealthState.set(node.id, {
       id: node.id,
       name: node.name,
