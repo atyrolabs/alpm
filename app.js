@@ -3161,6 +3161,7 @@ app.get("/api/servers/:id/reinstall/options", requireAuth, async (req, res, next
 
     let templates = [];
     let datastorePermissionRequired = false;
+    let canDownloadTemplate = false;
 
     try {
       const perms = await pve(node, "GET", "/access/permissions");
@@ -3168,22 +3169,49 @@ app.get("/api/servers/:id/reinstall/options", requireAuth, async (req, res, next
       if (!storagePerms["Datastore.AllocateSpace"] && !storagePerms["Administrator"]) {
         datastorePermissionRequired = true;
       }
+      canDownloadTemplate = Boolean(storagePerms["Datastore.AllocateTemplate"] || storagePerms["Administrator"]);
     } catch {}
 
+    // 1. Fetch Panel VM Templates from SQLite for this node and server type
+    try {
+      const panelTmpls = db.prepare("SELECT * FROM vm_templates WHERE (node_id=? OR node_id IS NULL) AND type=? ORDER BY id ASC").all(s.node_id, s.type);
+      for (const pt of panelTmpls) {
+        templates.push({
+          id: `panel_${pt.id}`,
+          panelTemplateId: pt.id,
+          vmid: pt.type === "qemu" ? Number(pt.template_source) : null,
+          name: `[Template] ${pt.name}`,
+          template: pt.template_source,
+          type: pt.type,
+          node: pveNode,
+          isLocal: true,
+          isPanelTemplate: true
+        });
+      }
+    } catch (dbErr) {
+      console.warn("Could not query panel templates:", dbErr.message);
+    }
+
+    // 2. Fetch live Proxmox templates
     if (s.type === "qemu") {
       try {
         const allVms = await pve(node, "GET", "/cluster/resources?type=vm");
         if (Array.isArray(allVms)) {
-          templates = allVms
+          allVms
             .filter(v => v.template === 1 && v.type === "qemu")
-            .map(v => ({
-              id: v.vmid,
-              vmid: v.vmid,
-              name: v.name || `Template ${v.vmid}`,
-              type: "qemu",
-              node: v.node || pveNode,
-              disk: v.maxdisk || 0
-            }));
+            .forEach(v => {
+              if (!templates.some(t => Number(t.vmid) === Number(v.vmid) || t.id === String(v.vmid))) {
+                templates.push({
+                  id: String(v.vmid),
+                  vmid: v.vmid,
+                  name: `[Proxmox VM ${v.vmid}] ${v.name || `Template ${v.vmid}`}`,
+                  type: "qemu",
+                  node: v.node || pveNode,
+                  disk: v.maxdisk || 0,
+                  isLocal: true
+                });
+              }
+            });
         }
       } catch (err) {
         console.warn("Could not query cluster templates:", err.message);
@@ -3198,11 +3226,12 @@ app.get("/api/servers/:id/reinstall/options", requireAuth, async (req, res, next
                 const tmpls = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/storage/${encodeURIComponent(st.storage)}/content?content=vztmpl`);
                 if (Array.isArray(tmpls)) {
                   for (const t of tmpls) {
-                    if (t.volid) {
+                    if (t.volid && !templates.some(ex => ex.template === t.volid || ex.id === t.volid)) {
+                      const cleanName = t.volid.split("/").pop();
                       templates.push({
                         id: t.volid,
-                        package: t.volid.split("/").pop(),
-                        name: t.volid.split("/").pop(),
+                        package: cleanName,
+                        name: `[Local Storage] ${cleanName}`,
                         template: t.volid,
                         type: "lxc",
                         isLocal: true
@@ -3216,28 +3245,31 @@ app.get("/api/servers/:id/reinstall/options", requireAuth, async (req, res, next
         }
       } catch {}
 
-      try {
-        const apl = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/aplinfo`);
-        if (Array.isArray(apl)) {
-          const popular = apl.filter(x => 
-            /ubuntu|debian|alpine|almalinux|rocky|centos|archlinux/i.test(x.package) &&
-            (x.architecture === "amd64" || !x.architecture)
-          );
-          for (const x of popular) {
-            if (!templates.some(t => t.id === x.template || t.name === x.package)) {
-              templates.push({
-                id: x.template,
-                package: x.package,
-                name: x.headline || x.package,
-                template: x.template,
-                type: "lxc",
-                isLocal: false
-              });
+      // Only query un-downloaded aplinfo if token has permission to download
+      if (canDownloadTemplate) {
+        try {
+          const apl = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/aplinfo`);
+          if (Array.isArray(apl)) {
+            const popular = apl.filter(x => 
+              /ubuntu|debian|alpine|almalinux|rocky|centos|archlinux/i.test(x.package) &&
+              (x.architecture === "amd64" || !x.architecture)
+            );
+            for (const x of popular) {
+              if (!templates.some(t => t.id === x.template || t.template === x.template || t.name.includes(x.package))) {
+                templates.push({
+                  id: x.template,
+                  package: x.package,
+                  name: x.headline || x.package,
+                  template: x.template,
+                  type: "lxc",
+                  isLocal: false
+                });
+              }
             }
           }
+        } catch (err) {
+          console.warn("Could not query aplinfo:", err.message);
         }
-      } catch (err) {
-        console.warn("Could not query aplinfo:", err.message);
       }
     }
 
@@ -3272,38 +3304,126 @@ app.post("/api/servers/:id/reinstall", requireAuth, async (req, res, next) => {
     const node = getNode(s.node_id);
     const pveNode = await ensureServerPveNode(s, node);
 
-    // 1. Capture current config
+    // STEP A: Resolve template source
+    let rawTemplateId = String(req.body.templateId || "").trim();
+    if (!rawTemplateId) {
+      return res.status(400).json({ error: "Please select an operating system template to reinstall." });
+    }
+
+    let resolvedTemplate = rawTemplateId;
+    let panelTemplate = null;
+
+    // Check if it's a panel template (e.g. "panel_1" or small integer ID)
+    let panelId = null;
+    if (rawTemplateId.startsWith("panel_")) {
+      panelId = Number(rawTemplateId.replace("panel_", ""));
+    } else if (/^\d+$/.test(rawTemplateId) && Number(rawTemplateId) < 100) {
+      panelId = Number(rawTemplateId);
+    }
+
+    if (panelId) {
+      panelTemplate = db.prepare("SELECT * FROM vm_templates WHERE id=?").get(panelId);
+      if (panelTemplate && panelTemplate.template_source) {
+        resolvedTemplate = panelTemplate.template_source;
+      }
+    }
+
+    // STEP B: Capture current hardware and network config before touching the server
     let currentConfig = {};
+    let vmExistsOnProxmox = true;
     try {
-      currentConfig = await pve(node, "GET", serverEndpoint(s, "/config")) || {};
+      currentConfig = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/${s.type}/${s.vmid}/config`) || {};
     } catch (err) {
-      console.warn("Could not read current config before reinstall:", err.message);
-    }
-
-    // 2. Stop VPS if running
-    try {
-      const statusRes = await pve(node, "GET", serverEndpoint(s, "/status/current"));
-      if (statusRes && statusRes.status === "running") {
-        const stopTask = await pve(node, "POST", serverEndpoint(s, "/status/stop"));
-        await waitForPveTask(node, pveNode, stopTask, 35);
+      const msg = String(err.message || "").toLowerCase();
+      if (msg.includes("does not exist") || msg.includes("no such")) {
+        vmExistsOnProxmox = false;
+        console.warn(`[Reinstall Notice] Server #${s.id} (VMID ${s.vmid}) config not found on Proxmox node '${pveNode}'. Will deploy fresh.`);
+      } else {
+        console.warn("Could not read current config before reinstall:", err.message);
       }
-    } catch (err) {
-      console.warn("Stop before reinstall notice:", err.message);
     }
 
+    // Hardware specifications with fallback to panel template or defaults
+    const cores = Number(currentConfig.cores || panelTemplate?.cores || 1);
+    const sockets = Number(currentConfig.sockets || panelTemplate?.sockets || 1);
+    const memory = Number(currentConfig.memory || panelTemplate?.memory || (s.type === "lxc" ? 1024 : 2048));
+    const swap = Number(currentConfig.swap || panelTemplate?.swap || (s.type === "lxc" ? 512 : 0));
+
+    // Network configuration: preserve existing net0, MAC address, and IP configuration
+    let net0 = currentConfig.net0 || (panelTemplate?.bridge ? `name=eth0,bridge=${panelTemplate.bridge},ip=dhcp` : "name=eth0,bridge=vmbr0,ip=dhcp");
+    const ipconfig0 = currentConfig.ipconfig0 || "";
+    const nameservers = currentConfig.nameserver || panelTemplate?.nameservers || "";
+    const searchdomain = currentConfig.searchdomain || panelTemplate?.search_domain || "";
+    const onboot = currentConfig.onboot !== undefined ? currentConfig.onboot : 1;
+    const startup = currentConfig.startup || "";
+
+    // STEP C: For LXC, verify and ensure template is available BEFORE stopping or deleting
+    let verifiedLxcTemplate = null;
+    if (s.type === "lxc") {
+      verifiedLxcTemplate = await ensureLxcTemplateDownloaded(node, pveNode, resolvedTemplate, "local");
+    }
+
+    // STEP D: For QEMU, verify the source template VMID exists BEFORE stopping or deleting
+    let qemuSourceVmid = null;
     if (s.type === "qemu") {
-      const templateId = Number(req.body.templateId);
-      if (!Number.isInteger(templateId) || templateId < 100) {
-        return res.status(400).json({ error: "Please select a valid QEMU template." });
+      qemuSourceVmid = Number(resolvedTemplate);
+      if (!Number.isInteger(qemuSourceVmid) || qemuSourceVmid < 100) {
+        return res.status(400).json({ error: "Invalid QEMU template selected. Expected a template VMID >= 100." });
+      }
+      try {
+        await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/qemu/${qemuSourceVmid}/status/current`);
+      } catch (tmplErr) {
+        try {
+          const allRes = await pve(node, "GET", "/cluster/resources?type=vm");
+          const foundTmpl = Array.isArray(allRes) ? allRes.find(x => Number(x.vmid) === qemuSourceVmid) : null;
+          if (!foundTmpl) {
+            throw new Error(`QEMU template VMID ${qemuSourceVmid} does not exist on cluster.`);
+          }
+        } catch {
+          throw new Error(`Selected QEMU template VMID ${qemuSourceVmid} is unreachable: ${tmplErr.message}`);
+        }
+      }
+    }
+
+    // STEP E: Stop VPS if currently running
+    if (vmExistsOnProxmox) {
+      try {
+        const stRes = await pve(node, "GET", `/nodes/${encodeURIComponent(pveNode)}/${s.type}/${s.vmid}/status/current`);
+        if (stRes && stRes.status === "running") {
+          try {
+            const stopTask = await pve(node, "POST", `/nodes/${encodeURIComponent(pveNode)}/${s.type}/${s.vmid}/status/stop`);
+            await waitForPveTask(node, pveNode, stopTask, 35);
+          } catch (stopErr) {
+            console.warn("Stop task notice:", stopErr.message);
+          }
+        }
+      } catch (err) {
+        console.warn("Status check notice:", err.message);
       }
 
-      // Preserve hardware specifications
-      const cores = Number(currentConfig.cores || 1);
-      const sockets = Number(currentConfig.sockets || 1);
-      const memory = Number(currentConfig.memory || 1024);
-      const net0 = currentConfig.net0 || "virtio,bridge=vmbr0";
+      // STEP F: Delete previous VM/CT if exists
+      try {
+        const delTask = await pve(node, "DELETE", `/nodes/${encodeURIComponent(pveNode)}/${s.type}/${s.vmid}?purge=1`);
+        await waitForPveTask(node, pveNode, delTask, 45);
+      } catch (err) {
+        const msg = String(err.message || "").toLowerCase();
+        if (msg.includes("does not exist") || msg.includes("no such")) {
+          // Already deleted, proceed cleanly
+        } else if (msg.includes("allocatespace")) {
+          return res.status(403).json({
+            error: "Proxmox permission required: Datastore.AllocateSpace. Please add role 'PVEDatastoreUser' or 'Administrator' to API token in Proxmox VE."
+          });
+        } else {
+          throw new Error(`Failed to remove previous ${s.type.toUpperCase()}: ${err.message}`);
+        }
+      }
 
-      // Detect storage pool and primary disk size
+      // Allow Proxmox cluster lock 2 seconds to fully clear after purge
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // STEP G: Deploy Fresh Operating System
+    if (s.type === "qemu") {
       let targetStorage = "local-lvm";
       let diskKey = "scsi0";
       for (const k of ["scsi0", "sata0", "virtio0", "ide0"]) {
@@ -3314,29 +3434,21 @@ app.post("/api/servers/:id/reinstall", requireAuth, async (req, res, next) => {
           break;
         }
       }
+      if (!currentConfig[diskKey] && panelTemplate?.storage) {
+        targetStorage = panelTemplate.storage;
+      }
 
       let originalDiskSize = null;
       if (currentConfig[diskKey]) {
         const sizeMatch = String(currentConfig[diskKey]).match(/size=([0-9]+[GMKT]?)/i);
         if (sizeMatch) originalDiskSize = sizeMatch[1];
+      } else if (panelTemplate?.disk_size) {
+        originalDiskSize = `${panelTemplate.disk_size}G`;
       }
 
-      // Delete existing VM
+      // Clone template to same VMID
       try {
-        const delTask = await pve(node, "DELETE", `/nodes/${encodeURIComponent(pveNode)}/qemu/${s.vmid}?purge=1`);
-        await waitForPveTask(node, pveNode, delTask, 45);
-      } catch (err) {
-        if (String(err.message).includes("AllocateSpace")) {
-          return res.status(403).json({
-            error: "Proxmox permission required: Datastore.AllocateSpace. Please add role 'PVEDatastoreUser' or 'Administrator' to API token in Proxmox VE (Datacenter -> Permissions)."
-          });
-        }
-        throw new Error(`Failed to remove previous VM: ${err.message}`);
-      }
-
-      // Clone template to the same VMID
-      try {
-        const cloneTask = await pve(node, "POST", `/nodes/${encodeURIComponent(pveNode)}/qemu/${templateId}/clone`, {
+        const cloneTask = await pve(node, "POST", `/nodes/${encodeURIComponent(pveNode)}/qemu/${qemuSourceVmid}/clone`, {
           newid: s.vmid,
           name: hostname || s.name,
           full: 1,
@@ -3346,13 +3458,16 @@ app.post("/api/servers/:id/reinstall", requireAuth, async (req, res, next) => {
       } catch (err) {
         if (String(err.message).includes("AllocateSpace")) {
           return res.status(403).json({
-            error: "Proxmox permission required: Datastore.AllocateSpace. Please add role 'PVEDatastoreUser' or 'Administrator' to API token in Proxmox VE (Datacenter -> Permissions)."
+            error: "Proxmox permission required: Datastore.AllocateSpace."
           });
         }
         throw new Error(`Failed to clone template: ${err.message}`);
       }
 
-      // Restore hardware resources and set cloud-init root credentials
+      // Small pause for config availability
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Restore hardware resources, networking, and inject Cloud-Init credentials
       const configUpdate = {
         cores,
         sockets,
@@ -3361,8 +3476,18 @@ app.post("/api/servers/:id/reinstall", requireAuth, async (req, res, next) => {
         ciuser: "root",
         cipassword: password
       };
+      if (ipconfig0) configUpdate.ipconfig0 = ipconfig0;
+      if (nameservers) configUpdate.nameserver = nameservers;
+      if (searchdomain) configUpdate.searchdomain = searchdomain;
       if (sshKey) configUpdate.sshkeys = encodeURIComponent(sshKey);
-      await pve(node, "POST", `/nodes/${encodeURIComponent(pveNode)}/qemu/${s.vmid}/config`, configUpdate);
+      if (onboot) configUpdate.onboot = 1;
+      if (startup) configUpdate.startup = startup;
+
+      try {
+        await pve(node, "POST", `/nodes/${encodeURIComponent(pveNode)}/qemu/${s.vmid}/config`, configUpdate);
+      } catch (cfgErr) {
+        console.warn("Post-reinstall config update notice:", cfgErr.message);
+      }
 
       // Resize disk to original provisioned size if needed
       if (originalDiskSize) {
@@ -3400,13 +3525,6 @@ app.post("/api/servers/:id/reinstall", requireAuth, async (req, res, next) => {
       }
 
     } else if (s.type === "lxc") {
-      const templateVolid = validateString(req.body.templateId, "LXC Template", 200);
-
-      const cores = Number(currentConfig.cores || 1);
-      const memory = Number(currentConfig.memory || 512);
-      const swap = Number(currentConfig.swap || 512);
-      const net0 = currentConfig.net0 || "name=eth0,bridge=vmbr0,ip=dhcp";
-
       let targetStorage = "local-lvm";
       let rootfsSize = "8";
       if (currentConfig.rootfs) {
@@ -3414,38 +3532,36 @@ app.post("/api/servers/:id/reinstall", requireAuth, async (req, res, next) => {
         if (match) targetStorage = match[1];
         const sizeMatch = String(currentConfig.rootfs).match(/size=([0-9]+[GMKT]?)/i);
         if (sizeMatch) rootfsSize = sizeMatch[1].replace(/G$/i, "");
+      } else if (panelTemplate?.storage) {
+        targetStorage = panelTemplate.storage;
+        if (panelTemplate.disk_size) rootfsSize = String(panelTemplate.disk_size);
       }
 
-      // Delete existing container
-      try {
-        const delTask = await pve(node, "DELETE", `/nodes/${encodeURIComponent(pveNode)}/lxc/${s.vmid}?purge=1`);
-        await waitForPveTask(node, pveNode, delTask, 45);
-      } catch (err) {
-        if (String(err.message).includes("AllocateSpace")) {
-          return res.status(403).json({
-            error: "Proxmox permission required: Datastore.AllocateSpace. Please add role 'PVEDatastoreUser' or 'Administrator' to API token in Proxmox VE (Datacenter -> Permissions)."
-          });
-        }
-        throw new Error(`Failed to remove previous container: ${err.message}`);
+      // Clean net0 for LXC creation (remove type=veth if present)
+      let cleanNet0 = net0;
+      if (typeof cleanNet0 === "string" && cleanNet0.includes("type=")) {
+        cleanNet0 = cleanNet0.split(",").filter(p => !p.startsWith("type=")).join(",");
       }
-
-      // Auto-verify and download template before reinstalling
-      const verifiedTemplate = await ensureLxcTemplateDownloaded(node, pveNode, templateVolid, "local");
 
       // Create fresh container
       const createParams = {
         vmid: s.vmid,
-        ostemplate: verifiedTemplate,
+        ostemplate: verifiedLxcTemplate,
         hostname: hostname || s.name,
         cores,
         memory,
         swap,
-        net0,
+        net0: cleanNet0,
         rootfs: `${targetStorage}:${rootfsSize}`,
         password,
         unprivileged: 1
       };
+      if (nameservers) createParams.nameserver = nameservers;
+      if (searchdomain) createParams.searchdomain = searchdomain;
       if (sshKey) createParams["ssh-public-keys"] = sshKey;
+      if (onboot) createParams.onboot = 1;
+      if (startup) createParams.startup = startup;
+      if (currentConfig.features) createParams.features = currentConfig.features;
 
       try {
         const createTask = await pve(node, "POST", `/nodes/${encodeURIComponent(pveNode)}/lxc`, createParams);
@@ -3453,13 +3569,13 @@ app.post("/api/servers/:id/reinstall", requireAuth, async (req, res, next) => {
       } catch (err) {
         const errMsg = String(err.message).toLowerCase();
         if (errMsg.includes("does not exist") || errMsg.includes("no such file")) {
-          const forcedVolid = await ensureLxcTemplateDownloaded(node, pveNode, templateVolid, "local", true);
+          const forcedVolid = await ensureLxcTemplateDownloaded(node, pveNode, resolvedTemplate, "local", true);
           createParams.ostemplate = forcedVolid;
           const retryTask = await pve(node, "POST", `/nodes/${encodeURIComponent(pveNode)}/lxc`, createParams);
           await waitForPveTask(node, pveNode, retryTask, 120);
         } else if (String(err.message).includes("AllocateSpace")) {
           return res.status(403).json({
-            error: "Proxmox permission required: Datastore.AllocateSpace. Please add role 'PVEDatastoreUser' or 'Administrator' to API token in Proxmox VE (Datacenter -> Permissions)."
+            error: "Proxmox permission required: Datastore.AllocateSpace."
           });
         } else {
           throw new Error(`Failed to create fresh container: ${err.message}`);

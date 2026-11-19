@@ -147,10 +147,10 @@ a { color: inherit; text-decoration: none; }
 .brand-logo-img {
   width: 38px;
   height: 38px;
-  border-radius: 10px;
-  object-fit: cover;
-  border: 1px solid var(--line);
-  background: var(--panel2);
+  border-radius: 0;
+  object-fit: contain;
+  border: none !important;
+  background: transparent !important;
   flex-shrink: 0;
   display: block;
 }
@@ -2191,7 +2191,9 @@ textarea.xterm-helper-textarea,
   width: auto;
   max-width: 40px;
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: 0;
+  border: none !important;
+  background: transparent !important;
 }
 .brand-name-text {
   font-family: var(--font-heading);
@@ -5036,6 +5038,12 @@ async function loadReinstallTab(id) {
       try { navigator.clipboard.writeText(generated); toast("Generated password copied to clipboard!"); } catch {}
       if (check) check.dispatchEvent(new Event("change"));
     };
+    if (toggleBtn && passInput) {
+      toggleBtn.onclick = (e) => {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        togglePasswordVisibility(passInput, toggleBtn);
+      };
+    }
     if (check && submitBtn) {
       const validate = () => { submitBtn.disabled = !check.checked || (passInput && passInput.value.length < 8); };
       check.onchange = validate;
@@ -5835,6 +5843,7 @@ async function openXtermConsole(id) {
       </div>
       <div class="terminal-modal-actions">
         <button id="btnTermCopy" title="Copy all terminal output or selection to clipboard">${ico("clipboard", "sm")} Copy Text</button>
+        <button id="btnTermPaste" title="Paste text from clipboard into terminal">${ico("clipboard", "sm")} Paste</button>
         <button id="btnTermEnter" title="Send Enter / Return to console">${ico("cornerDownLeft", "sm")} Enter</button>
         <button id="btnTermCtrlC" title="Send Ctrl+C interrupt signal">${ico("code", "sm")} Ctrl+C</button>
         <button id="btnTermCad" title="Send Ctrl+Alt+Del signal">${ico("refresh", "sm")} Ctrl+Alt+Del</button>
@@ -5961,6 +5970,27 @@ async function openXtermConsole(id) {
         toast("No terminal text to copy yet.", "warning");
       }
       try { copyBtn.blur(); } catch (_) {}
+      focusTerminal();
+    };
+  }
+
+  // Paste button
+  const pasteBtn = $("#btnTermPaste");
+  if (pasteBtn) {
+    pasteBtn.onclick = async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          const text = await navigator.clipboard.readText();
+          if (text && term) {
+            term.paste(text);
+          }
+        } else {
+          toast("Please use Ctrl+V to paste.", "warning");
+        }
+      } catch (err) {
+        toast("Clipboard access blocked by browser. Please use Ctrl+V.", "warning");
+      }
+      try { pasteBtn.blur(); } catch (_) {}
       focusTerminal();
     };
   }
@@ -6115,15 +6145,10 @@ async function openXtermConsole(id) {
           }
           return true;
         }
-        if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V") && e.type === "keydown") {
-          if (navigator.clipboard && navigator.clipboard.readText) {
-            navigator.clipboard.readText().then(pasted => {
-              if (pasted && ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "input", data: pasted }));
-              }
-            }).catch(() => {});
-            return false;
-          }
+        if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+          // Allow native browser paste event to fire onto xterm helper textarea naturally without duplicate WS dispatch.
+          // Returning false tells xterm NOT to process keydown as the terminal control code (^V / 0x16)
+          return false;
         }
         // In xterm 5.3.0, _keyDown emits keys with keyCode >= 48 (numbers, lowercase letters, symbols)
         // but skips uppercase A-Z (65-90) and Space (32), which rely on keypress.
@@ -6284,15 +6309,26 @@ async function openXtermConsole(id) {
         setStatus("disconnected", "Disconnected");
       };
 
-      let lastInputChar = null;
+      let lastInputData = null;
       let lastInputTime = 0;
       term.onData((data) => {
+        if (!data) return;
         const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-        // Drop duplicate single-character event echoes occurring within 40ms from xterm internal dispatch
-        if (data.length === 1 && data === lastInputChar && (now - lastInputTime) < 40) {
-          return;
+        const elapsed = now - lastInputTime;
+
+        // Drop duplicate echoes or rapid double-dispatch events:
+        // Multi-character string (pasted text): duplicate within 300ms is a duplicate paste echo
+        // Single character: duplicate within 40ms is a browser event bounce (held-key auto-repeat is >50ms)
+        if (data === lastInputData) {
+          if (data.length > 1 && elapsed < 300) {
+            return;
+          }
+          if (data.length === 1 && elapsed < 40) {
+            return;
+          }
         }
-        lastInputChar = data;
+
+        lastInputData = data;
         lastInputTime = now;
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "input", data }));
