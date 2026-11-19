@@ -11815,11 +11815,19 @@ function initProfileControllers() {
   if (urlParams.get("discord_success") === "linked") {
     toast("Discord account linked successfully!", "success");
     history.replaceState(null, "", window.location.pathname + "#profile");
+    profilePage($("#main")).catch(console.error);
   } else if (urlParams.get("discord_error")) {
     const errCode = urlParams.get("discord_error");
-    const msg = errCode === "already_linked"
-      ? "This Discord account is already bound to another panel user."
-      : decodeURIComponent(errCode);
+    let msg = decodeURIComponent(errCode);
+    if (errCode === "already_linked") {
+      msg = "This Discord account is already bound to another panel user.";
+    } else if (errCode === "invalid_oauth_state") {
+      msg = "Authentication state mismatch or session expired. Please try connecting Discord again.";
+    } else if (errCode === "access_denied") {
+      msg = "Discord authorization was cancelled or denied.";
+    } else if (errCode === "missing_code") {
+      msg = "No authorization code returned from Discord.";
+    }
     toast("Discord Link Failed: " + msg, "error");
     history.replaceState(null, "", window.location.pathname + "#profile");
   }

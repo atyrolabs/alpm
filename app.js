@@ -16,7 +16,6 @@ const fs = require("fs");
 const { Server } = require("socket.io");
 const readline = require("readline");
 const WebSocket = require("ws");
-const discord2fa = require("./services/discord2fa");
 
 const app = express();
 const server = http.createServer(app);
@@ -41,6 +40,348 @@ if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
   console.error("ENCRYPTION_KEY must be set and at least 32 characters long.");
   process.exit(1);
 }
+
+// ==========================================
+// DISCORD 2FA & OAUTH2 SERVICE MODULE
+// ==========================================
+const DISCORD_API_BASE = "https://discord.com/api/v10";
+
+function getDiscordConfig() {
+  return {
+    botToken: (process.env.DISCORD_BOT_TOKEN || "").trim(),
+    clientId: (process.env.DISCORD_CLIENT_ID || "").trim(),
+    clientSecret: (process.env.DISCORD_CLIENT_SECRET || "").trim(),
+    redirectUri: (process.env.DISCORD_REDIRECT_URI || "http://localhost:3000/api/auth/discord/callback").trim(),
+    enabled: (process.env.DISCORD_2FA_ENABLED || "true").toLowerCase() !== "false"
+  };
+}
+
+function generateOtpCode() {
+  const codeInt = crypto.randomInt(100000, 1000000);
+  return codeInt.toString();
+}
+
+function hashOtpCode(code) {
+  const secret = process.env.ENCRYPTION_KEY || SESSION_SECRET || "alpm_2fa_secure_key_fallback";
+  return crypto.createHmac("sha256", secret).update(String(code).trim()).digest("hex");
+}
+
+function verifyOtpCode(inputCode, storedHash) {
+  if (!inputCode || !storedHash) return false;
+  try {
+    const inputHash = hashOtpCode(inputCode);
+    const bufA = Buffer.from(inputHash, "utf8");
+    const bufB = Buffer.from(storedHash, "utf8");
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+  } catch (err) {
+    console.error("[2FA] Error in verifyOtpCode:", err);
+    return false;
+  }
+}
+
+function generateBackupCodes(count = 10) {
+  const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 32 characters, no ambiguous 0/O or 1/I
+  const codes = [];
+  for (let i = 0; i < count; i++) {
+    let part1 = "";
+    let part2 = "";
+    let part3 = "";
+    for (let j = 0; j < 4; j++) part1 += chars[crypto.randomInt(0, chars.length)];
+    for (let j = 0; j < 4; j++) part2 += chars[crypto.randomInt(0, chars.length)];
+    for (let j = 0; j < 4; j++) part3 += chars[crypto.randomInt(0, chars.length)];
+    codes.push(`${part1}-${part2}-${part3}`);
+  }
+  return codes;
+}
+
+function hashBackupCode(code, userUuid = "") {
+  const normalized = String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const secret = process.env.ENCRYPTION_KEY || SESSION_SECRET || "alpm_backup_code_secret";
+  return crypto.createHmac("sha256", secret).update(`${normalized}:${userUuid}`).digest("hex");
+}
+
+function verifyAndConsumeBackupCode(rawInputCode, storedHashedCodesArray = [], userUuid = "") {
+  const normalized = String(rawInputCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (normalized.length < 8) return { valid: false };
+
+  const inputHash = hashBackupCode(normalized, userUuid);
+  const inputBuf = Buffer.from(inputHash, "utf8");
+
+  let matchIndex = -1;
+  for (let i = 0; i < storedHashedCodesArray.length; i++) {
+    const candidateHash = storedHashedCodesArray[i];
+    const candidateBuf = Buffer.from(candidateHash, "utf8");
+    if (candidateBuf.length === inputBuf.length && crypto.timingSafeEqual(candidateBuf, inputBuf)) {
+      matchIndex = i;
+      break;
+    }
+  }
+
+  if (matchIndex >= 0) {
+    const remainingCodes = [...storedHashedCodesArray];
+    remainingCodes.splice(matchIndex, 1);
+    return { valid: true, remainingCodes, burnedCodeHash: storedHashedCodesArray[matchIndex] };
+  }
+
+  return { valid: false };
+}
+
+async function sendDiscordOtp(discordUserId, otpCode, options = {}) {
+  const config = getDiscordConfig();
+  const purpose = options.purpose || "login";
+  const username = options.username || "User";
+  const ip = options.ip || "Unknown IP";
+
+  const purposeLabels = {
+    login: "Panel Sign-In Verification",
+    forgot_password: "Password Reset Request",
+    setup_2fa: "Two-Factor Authentication Setup",
+    admin_action: "Administrative Security Verification"
+  };
+
+  const actionName = purposeLabels[purpose] || "Security Verification";
+
+  if (!config.botToken || config.botToken.length < 20 || config.botToken.includes("YOUR_BOT_TOKEN")) {
+    console.log(`\n=============================================================`);
+    console.log(`[DISCORD 2FA SIMULATION MODE]`);
+    console.log(`Recipient Discord ID: ${discordUserId}`);
+    console.log(`Purpose             : ${actionName}`);
+    console.log(`6-Digit OTP Code    : >>> ${otpCode} <<<`);
+    console.log(`Expires In          : 5 minutes`);
+    console.log(`Client IP           : ${ip}`);
+    console.log(`(Configure DISCORD_BOT_TOKEN in .env to deliver real Discord DMs)`);
+    console.log(`=============================================================\n`);
+    return {
+      success: true,
+      simulated: true,
+      message: "Simulation mode: verification code generated and logged to panel server console."
+    };
+  }
+
+  try {
+    const channelRes = await axios.post(
+      `${DISCORD_API_BASE}/users/@me/channels`,
+      { recipient_id: String(discordUserId).trim() },
+      {
+        headers: {
+          Authorization: `Bot ${config.botToken}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 8000
+      }
+    );
+
+    const channelId = channelRes.data?.id;
+    if (!channelId) {
+      throw new Error("Failed to open Discord direct message channel with user.");
+    }
+
+    const embed = {
+      title: "🔐 ALPM Security Verification Code",
+      color: 0x5865F2,
+      description: `Hello **${username}**,\n\nUse the single-use 6-digit verification code below to complete your **${actionName}**.\n\n# \`\`\`${otpCode}\`\`\`\n\n> ⏱️ **This code expires in 5 minutes.**`,
+      fields: [
+        {
+          name: "Action",
+          value: actionName,
+          inline: true
+        },
+        {
+          name: "Requested From",
+          value: `\`${ip}\``,
+          inline: true
+        },
+        {
+          name: "Expires In",
+          value: "5 Minutes",
+          inline: true
+        }
+      ],
+      footer: {
+        text: "Never share this code with anyone. ALPM Staff will never ask for your verification code."
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    await axios.post(
+      `${DISCORD_API_BASE}/channels/${channelId}/messages`,
+      { embeds: [embed] },
+      {
+        headers: {
+          Authorization: `Bot ${config.botToken}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 8000
+      }
+    );
+
+    return {
+      success: true,
+      simulated: false,
+      channelId
+    };
+  } catch (error) {
+    console.error(`[DISCORD 2FA ERROR] Failed to send OTP to Discord user ${discordUserId}:`, error.response?.data || error.message);
+    const discordErrorCode = error.response?.data?.code;
+    let friendlyMessage = "Failed to deliver verification code through Discord.";
+
+    if (discordErrorCode === 50007) {
+      friendlyMessage = "Cannot send Discord DM to this account. Please verify that your Discord Privacy Settings allow Direct Messages from server members, and ensure you share at least one Discord server with our bot.";
+    } else if (discordErrorCode === 10013) {
+      friendlyMessage = "The linked Discord user account was not found. Please re-link your Discord account in settings.";
+    } else if (error.response?.status === 401) {
+      friendlyMessage = "Discord Bot Token is invalid or unauthorized. Please verify DISCORD_BOT_TOKEN in .env.";
+    } else if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
+      friendlyMessage = "Connection to Discord API timed out. Please try again shortly.";
+    }
+
+    const err = new Error(friendlyMessage);
+    err.original = error.response?.data || error.message;
+    err.discordCode = discordErrorCode;
+    throw err;
+  }
+}
+
+function getDiscordOAuthUrl(state) {
+  const config = getDiscordConfig();
+  if (!config.clientId) {
+    throw new Error("DISCORD_CLIENT_ID is not configured in .env");
+  }
+  const redirectUri = encodeURIComponent(config.redirectUri);
+  const encodedState = encodeURIComponent(state);
+  return `https://discord.com/api/oauth2/authorize?client_id=${config.clientId}&redirect_uri=${redirectUri}&response_type=code&scope=identify%20email&state=${encodedState}&prompt=consent`;
+}
+
+async function exchangeDiscordCode(code) {
+  const config = getDiscordConfig();
+  if (!config.clientId || !config.clientSecret) {
+    throw new Error("DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET must be configured in .env for OAuth2 linking.");
+  }
+
+  const params = new URLSearchParams();
+  params.append("client_id", config.clientId);
+  params.append("client_secret", config.clientSecret);
+  params.append("grant_type", "authorization_code");
+  params.append("code", code);
+  params.append("redirect_uri", config.redirectUri);
+
+  let tokenRes;
+  try {
+    tokenRes = await axios.post("https://discord.com/api/oauth2/token", params.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: 10000
+    });
+  } catch (err) {
+    const errorDetails = err.response?.data?.error_description || err.response?.data?.message || err.message;
+    console.error("[Discord OAuth2 Token Exchange Error]:", errorDetails, err.response?.data || "");
+    throw new Error(errorDetails || "Failed to exchange Discord authorization code.");
+  }
+
+  const accessToken = tokenRes.data?.access_token;
+  if (!accessToken) {
+    throw new Error("Failed to obtain Discord OAuth2 access token.");
+  }
+
+  let userRes;
+  try {
+    userRes = await axios.get(`${DISCORD_API_BASE}/users/@me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+  } catch (err) {
+    const errorDetails = err.response?.data?.message || err.message;
+    console.error("[Discord OAuth2 Profile Fetch Error]:", errorDetails);
+    throw new Error("Failed to fetch Discord user profile: " + errorDetails);
+  }
+
+  const u = userRes.data;
+  let avatarUrl = "";
+  if (u.avatar) {
+    const ext = u.avatar.startsWith("a_") ? "gif" : "png";
+    avatarUrl = `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.${ext}?size=256`;
+  }
+
+  return {
+    id: u.id,
+    username: u.username,
+    discriminator: u.discriminator,
+    globalName: u.global_name || u.username,
+    avatar: avatarUrl,
+    avatarHash: u.avatar || null,
+    email: u.email || null,
+    verified: !!u.verified
+  };
+}
+
+async function getDiscordBotStatus() {
+  const config = getDiscordConfig();
+  if (!config.botToken || config.botToken.length < 20 || config.botToken.includes("YOUR_BOT_TOKEN")) {
+    return {
+      configured: false,
+      online: false,
+      status: "unconfigured",
+      message: "DISCORD_BOT_TOKEN is not configured in .env.",
+      clientId: config.clientId ? `${config.clientId.slice(0, 6)}...` : "Not set",
+      redirectUri: config.redirectUri,
+      twoFactorEnabled: config.enabled
+    };
+  }
+
+  try {
+    const res = await axios.get(`${DISCORD_API_BASE}/users/@me`, {
+      headers: { Authorization: `Bot ${config.botToken}` },
+      timeout: 6000
+    });
+
+    const bot = res.data;
+    let botAvatar = "";
+    if (bot.avatar) {
+      botAvatar = `https://cdn.discordapp.com/avatars/${bot.id}/${bot.avatar}.png?size=128`;
+    }
+
+    return {
+      configured: true,
+      online: true,
+      status: "online",
+      bot: {
+        id: bot.id,
+        username: bot.username,
+        discriminator: bot.discriminator,
+        avatar: botAvatar,
+        tag: `${bot.username}#${bot.discriminator}`
+      },
+      clientId: config.clientId ? `${config.clientId.slice(0, 6)}...` : "Not set",
+      redirectUri: config.redirectUri,
+      twoFactorEnabled: config.enabled
+    };
+  } catch (err) {
+    return {
+      configured: true,
+      online: false,
+      status: "error",
+      message: err.response?.data?.message || err.message,
+      httpStatus: err.response?.status,
+      clientId: config.clientId ? `${config.clientId.slice(0, 6)}...` : "Not set",
+      redirectUri: config.redirectUri,
+      twoFactorEnabled: config.enabled
+    };
+  }
+}
+
+const discord2fa = {
+  getDiscordConfig,
+  generateOtpCode,
+  hashOtpCode,
+  verifyOtpCode,
+  generateBackupCodes,
+  hashBackupCode,
+  verifyAndConsumeBackupCode,
+  sendDiscordOtp,
+  getDiscordOAuthUrl,
+  exchangeDiscordCode,
+  getDiscordBotStatus
+};
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -325,6 +666,15 @@ CREATE TABLE IF NOT EXISTS identity_link_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_link_codes_code ON identity_link_codes(code);
 CREATE INDEX IF NOT EXISTS idx_link_codes_user ON identity_link_codes(user_id);
+
+CREATE TABLE IF NOT EXISTS oauth_states (
+  state TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'discord',
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_states_user ON oauth_states(user_id);
 `);
 
 // Auto-migrate any existing discord_* placeholder usernames into user_identities if not already mapped
@@ -586,7 +936,7 @@ const sessionMiddleware = session({
   rolling: true,
   cookie: {
     httpOnly: true,
-    sameSite: "strict",
+    sameSite: "lax",
     secure: process.env.COOKIE_SECURE === "true",
     maxAge: 1000 * 60 * 60 * 8
   }
@@ -1987,11 +2337,34 @@ app.post("/api/auth/forgot-password/verify-reset", passwordResetLimiter, async (
 });
 
 // Get Discord OAuth2 Link Authorization URL
-app.get("/api/auth/discord/connect", requireAuth, (req, res, next) => {
+app.get("/api/auth/discord/connect", requireAuth, async (req, res, next) => {
   try {
-    const rawState = crypto.randomBytes(24).toString("hex") + ":" + req.user.id;
-    req.session.discordOAuthState = rawState;
-    const url = discord2fa.getDiscordOAuthUrl(rawState);
+    const nonce = crypto.randomBytes(24).toString("hex");
+    const userId = req.user.id;
+    const expiresAt = Date.now() + 15 * 60 * 1000; // 15-minute TTL
+    const payload = `${nonce}:${userId}:${expiresAt}`;
+    const signature = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex");
+    const fullState = `${payload}:${signature}`;
+
+    // Clean up expired states and persist state to database table
+    try {
+      db.prepare("DELETE FROM oauth_states WHERE expires_at < ?").run(Date.now());
+      db.prepare(`
+        INSERT OR REPLACE INTO oauth_states (state, user_id, provider, expires_at)
+        VALUES (?, ?, 'discord', ?)
+      `).run(fullState, userId, expiresAt);
+    } catch (dbErr) {
+      console.warn("[Discord OAuth2] Warning storing oauth state in DB:", dbErr.message);
+    }
+
+    req.session.discordOAuthState = fullState;
+
+    // Explicitly persist session to SQLite store before returning response
+    await new Promise((resolve, reject) => {
+      req.session.save((err) => (err ? reject(err) : resolve()));
+    });
+
+    const url = discord2fa.getDiscordOAuthUrl(fullState);
     res.json({ ok: true, url });
   } catch (e) { next(e); }
 });
@@ -1999,24 +2372,80 @@ app.get("/api/auth/discord/connect", requireAuth, (req, res, next) => {
 // Discord OAuth2 Redirect Callback Handler
 app.get("/api/auth/discord/callback", async (req, res, next) => {
   try {
+    // If Discord returned an error query param (e.g. user denied consent: ?error=access_denied)
+    if (req.query.error) {
+      const errReason = req.query.error_description || req.query.error;
+      console.warn("[Discord OAuth2 Callback] Discord authorization returned error:", errReason);
+      return res.redirect("/#profile?discord_error=" + encodeURIComponent(errReason));
+    }
+
     const code = String(req.query.code || "").trim();
-    const state = String(req.query.state || "").trim();
+    let state = String(req.query.state || "").trim();
 
     if (!code) {
       return res.redirect("/#profile?discord_error=missing_code");
     }
-
-    // Strict CSRF State Validation
-    const expectedState = req.session?.discordOAuthState;
-    if (req.session) delete req.session.discordOAuthState;
-
-    if (!state || !expectedState || state !== expectedState) {
+    if (!state) {
       return res.redirect("/#profile?discord_error=invalid_oauth_state");
     }
 
-    const targetUserId = req.session?.user?.id;
-    if (!targetUserId) {
-      return res.redirect("/#profile?discord_error=session_expired");
+    if (state.includes("%")) {
+      try { state = decodeURIComponent(state); } catch (_) {}
+    }
+
+    let isValid = false;
+    let targetUserId = null;
+
+    // 1. Verify against database oauth_states table
+    try {
+      const dbEntry = db.prepare("SELECT * FROM oauth_states WHERE state = ? AND provider = 'discord'").get(state);
+      if (dbEntry) {
+        if (dbEntry.expires_at > Date.now()) {
+          // Cryptographic HMAC signature verification
+          const parts = state.split(":");
+          if (parts.length === 4) {
+            const [nonce, uidStr, expStr, sig] = parts;
+            const expectedSig = crypto.createHmac("sha256", SESSION_SECRET).update(`${nonce}:${uidStr}:${expStr}`).digest("hex");
+            if (sig.length === expectedSig.length && crypto.timingSafeEqual(Buffer.from(sig, "utf8"), Buffer.from(expectedSig, "utf8"))) {
+              isValid = true;
+              targetUserId = dbEntry.user_id;
+            }
+          } else {
+            isValid = true;
+            targetUserId = dbEntry.user_id;
+          }
+        }
+        db.prepare("DELETE FROM oauth_states WHERE state = ?").run(state); // Single-use consumption
+      }
+    } catch (e) {
+      console.warn("[Discord OAuth2 Callback] DB check error:", e.message);
+    }
+
+    // 2. Check session-stored state and ALWAYS delete session state to prevent replay
+    if (req.session?.discordOAuthState) {
+      if (!isValid && req.session.discordOAuthState === state) {
+        isValid = true;
+        if (!targetUserId && req.session.user?.id) {
+          targetUserId = req.session.user.id;
+        }
+      }
+      delete req.session.discordOAuthState;
+    }
+
+    if (!isValid || !targetUserId) {
+      console.warn("[Discord OAuth2 Callback] State validation failed. Received state:", state);
+      return res.redirect("/#profile?discord_error=invalid_oauth_state");
+    }
+
+    // Check session user: if session was dropped due to cross-site navigation, restore session
+    if (!req.session?.user?.id) {
+      const userRecord = db.prepare("SELECT id, username, role FROM users WHERE id = ?").get(targetUserId);
+      if (userRecord) {
+        req.session.user = { id: userRecord.id, username: userRecord.username, role: userRecord.role };
+      }
+    } else if (req.session.user.id !== targetUserId) {
+      audit(req.session.user.id, "identity.discord_mismatch_blocked", `Blocked Discord OAuth link: session user #${req.session.user.id} does not match state user #${targetUserId}`, req);
+      return res.redirect("/#profile?discord_error=user_mismatch");
     }
 
     // Exchange OAuth2 code for Discord user profile
@@ -2050,6 +2479,15 @@ app.get("/api/auth/discord/callback", async (req, res, next) => {
       SET discord_id = ?, discord_username = ?, discord_avatar = ?
       WHERE id = ?
     `).run(profile.id, profile.username, profile.avatar || "", targetUserId);
+
+    // Refresh session user if active
+    if (req.session?.user) {
+      req.session.user.discord_id = profile.id;
+      req.session.user.discord_username = profile.username;
+      req.session.user.discord_avatar = profile.avatar || "";
+    }
+
+    await new Promise((resolve) => req.session.save(resolve));
 
     audit(targetUserId, "identity.discord_linked", `Linked Discord account @${profile.username} (${profile.id}) via OAuth2`, req);
 
