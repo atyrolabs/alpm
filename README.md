@@ -1,7 +1,7 @@
 # ALPM — Proxmox VPS Management Panel
 
 <p align="center">
-  <img src="https://img.shields.io/badge/ALPM-v2.1.0-orange?style=for-the-badge" alt="ALPM Version">
+  <img src="https://img.shields.io/badge/ALPM-v2.0.0-orange?style=for-the-badge" alt="ALPM Version">
   <img src="https://img.shields.io/badge/Developer-Atyro%20Labs-white?style=for-the-badge" alt="Atyro Labs">
   <img src="https://img.shields.io/badge/Platform-Proxmox%20VE%207%20%2F%208-orange?style=for-the-badge" alt="Proxmox VE">
   <img src="https://img.shields.io/badge/Node.js-20%2B-green?style=for-the-badge" alt="Node.js">
